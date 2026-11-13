@@ -35,7 +35,7 @@ public final class LaTeXSyntaxHighlighter {
         )
     }
 
-    public func highlight(textStorage: NSTextStorage, fontSize: CGFloat = 13.5) {
+    public func highlight(textStorage: NSTextStorage, fontSize: CGFloat = 13.5, lightBackground: Bool = true) {
         let string = textStorage.string
         let fullRange = NSRange(location: 0, length: (string as NSString).length)
         guard fullRange.length > 0 else { return }
@@ -43,35 +43,61 @@ public final class LaTeXSyntaxHighlighter {
         let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
         let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
 
+        // High-contrast explicit sRGB palette for effortless reading
+        let baseTextColor = lightBackground
+            ? NSColor(srgbRed: 0.06, green: 0.09, blue: 0.16, alpha: 1.0) // #0F172A deep ink
+            : NSColor(srgbRed: 0.94, green: 0.96, blue: 0.99, alpha: 1.0) // #F0F5FC bright white
+        let mathColor = lightBackground
+            ? NSColor(srgbRed: 0.04, green: 0.45, blue: 0.40, alpha: 1.0) // #0A7366 deep emerald
+            : NSColor(srgbRed: 0.34, green: 0.86, blue: 0.78, alpha: 1.0) // bright teal
+        let stdCmdColor = lightBackground
+            ? NSColor(srgbRed: 0.01, green: 0.36, blue: 0.68, alpha: 1.0) // #035CAD cobalt blue
+            : NSColor(srgbRed: 0.47, green: 0.76, blue: 1.00, alpha: 1.0) // bright sky blue
+        let envCmdColor = lightBackground
+            ? NSColor(srgbRed: 0.11, green: 0.25, blue: 0.76, alpha: 1.0) // #1C40C2 royal indigo
+            : NSColor(srgbRed: 0.65, green: 0.72, blue: 1.00, alpha: 1.0) // bright periwinkle
+        let envArgColor = lightBackground
+            ? NSColor(srgbRed: 0.71, green: 0.27, blue: 0.03, alpha: 1.0) // #B54508 burnt amber
+            : NSColor(srgbRed: 1.00, green: 0.68, blue: 0.35, alpha: 1.0) // warm orange
+        let expl3Color = lightBackground
+            ? NSColor(srgbRed: 0.42, green: 0.13, blue: 0.74, alpha: 1.0) // #6B21BD deep violet
+            : NSColor(srgbRed: 0.84, green: 0.65, blue: 1.00, alpha: 1.0) // bright lavender
+        let paramColor = lightBackground
+            ? NSColor(srgbRed: 0.75, green: 0.07, blue: 0.24, alpha: 1.0) // #BF123D crimson
+            : NSColor(srgbRed: 1.00, green: 0.48, blue: 0.58, alpha: 1.0) // bright coral
+        let commentColor = lightBackground
+            ? NSColor(srgbRed: 0.27, green: 0.35, blue: 0.45, alpha: 1.0) // #455973 readable slate
+            : NSColor(srgbRed: 0.58, green: 0.66, blue: 0.75, alpha: 1.0) // cool steel grey
+
         textStorage.beginEditing()
         textStorage.setAttributes([
             .font: baseFont,
-            .foregroundColor: NSColor.labelColor
+            .foregroundColor: baseTextColor
         ], range: fullRange)
 
         // 1. Inline math ($...$)
         inlineMathRegex?.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let range = match?.range else { return }
-            textStorage.addAttribute(.foregroundColor, value: NSColor.systemTeal, range: range)
+            textStorage.addAttribute(.foregroundColor, value: mathColor, range: range)
         }
 
         // 2. Standard LaTeX commands (\section, \alpha, etc.)
         standardCommandRegex?.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let range = match?.range else { return }
-            textStorage.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: range)
+            textStorage.addAttribute(.foregroundColor, value: stdCmdColor, range: range)
         }
 
         // 3. Environments & packages (\begin{...}, \usepackage{...})
         envRegex?.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let match = match else { return }
             textStorage.addAttributes([
-                .foregroundColor: NSColor.systemIndigo,
+                .foregroundColor: envCmdColor,
                 .font: boldFont
             ], range: match.range)
             if match.numberOfRanges >= 2 {
                 let argRange = match.range(at: 1)
                 if argRange.location != NSNotFound {
-                    textStorage.addAttribute(.foregroundColor, value: NSColor.systemOrange, range: argRange)
+                    textStorage.addAttribute(.foregroundColor, value: envArgColor, range: argRange)
                 }
             }
         }
@@ -80,7 +106,7 @@ public final class LaTeXSyntaxHighlighter {
         expl3CommandRegex?.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let range = match?.range else { return }
             textStorage.addAttributes([
-                .foregroundColor: NSColor.systemPurple,
+                .foregroundColor: expl3Color,
                 .font: boldFont
             ], range: range)
         }
@@ -89,7 +115,7 @@ public final class LaTeXSyntaxHighlighter {
         argumentTokenRegex?.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let range = match?.range else { return }
             textStorage.addAttributes([
-                .foregroundColor: NSColor.systemPink,
+                .foregroundColor: paramColor,
                 .font: boldFont
             ], range: range)
         }
@@ -98,7 +124,7 @@ public final class LaTeXSyntaxHighlighter {
         commentRegex?.enumerateMatches(in: string, range: fullRange) { match, _, _ in
             guard let range = match?.range else { return }
             textStorage.addAttributes([
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: commentColor,
                 .font: baseFont
             ], range: range)
         }
@@ -118,11 +144,19 @@ public final class LineNumberGutterView: NSRulerView {
             }
         }
     }
+    public var lightBackground: Bool = true {
+        didSet {
+            if oldValue != lightBackground {
+                needsDisplay = true
+            }
+        }
+    }
 
     public init(textView: NSTextView) {
         super.init(scrollView: textView.enclosingScrollView, orientation: .verticalRuler)
         self.clientView = textView
         self.ruleThickness = 46
+        self.clipsToBounds = true
     }
 
     @available(*, unavailable)
@@ -136,12 +170,21 @@ public final class LineNumberGutterView: NSRulerView {
               let textContainer = textView.textContainer
         else { return }
 
-        NSColor.windowBackgroundColor.withAlphaComponent(0.6).setFill()
-        rect.fill()
+        let gutterBounds = NSRect(x: 0, y: bounds.minY, width: ruleThickness, height: bounds.height)
+        NSBezierPath(rect: gutterBounds).addClip()
+
+        let gutterBg = lightBackground
+            ? NSColor(srgbRed: 0.95, green: 0.96, blue: 0.98, alpha: 1.0) // #F1F5F9
+            : NSColor(srgbRed: 0.09, green: 0.11, blue: 0.15, alpha: 1.0) // #161B22
+        gutterBg.setFill()
+        gutterBounds.fill()
 
         // Subtle separator line on right edge of gutter
-        let sepRect = NSRect(x: bounds.maxX - 1, y: rect.minY, width: 1, height: rect.height)
-        NSColor.separatorColor.withAlphaComponent(0.4).setFill()
+        let sepRect = NSRect(x: ruleThickness - 1, y: gutterBounds.minY, width: 1, height: gutterBounds.height)
+        let sepColor = lightBackground
+            ? NSColor(srgbRed: 0.82, green: 0.85, blue: 0.90, alpha: 1.0)
+            : NSColor(srgbRed: 0.20, green: 0.24, blue: 0.30, alpha: 1.0)
+        sepColor.setFill()
         sepRect.fill()
 
         let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: textView.visibleRect, in: textContainer)
@@ -176,6 +219,14 @@ public final class LineNumberGutterView: NSRulerView {
             let isCurrent = (lineNumber == currentCursorLine)
             let severity = diagnosticsByLine[lineNumber]
 
+            if isCurrent {
+                let activeRowBg = lightBackground
+                    ? NSColor(srgbRed: 0.88, green: 0.91, blue: 0.96, alpha: 1.0)
+                    : NSColor(srgbRed: 0.14, green: 0.18, blue: 0.25, alpha: 1.0)
+                activeRowBg.setFill()
+                NSRect(x: 0, y: lineRect.minY, width: ruleThickness - 1, height: lineRect.height).fill()
+            }
+
             // Draw diagnostic indicator dot or row highlight
             if let severity = severity {
                 let markerColor: NSColor = severity == .error ? .systemRed : (severity == .warning ? .systemOrange : .systemBlue)
@@ -191,9 +242,13 @@ public final class LineNumberGutterView: NSRulerView {
             } else if severity == .warning {
                 labelColor = .systemOrange
             } else if isCurrent {
-                labelColor = .labelColor
+                labelColor = lightBackground
+                    ? NSColor(srgbRed: 0.06, green: 0.09, blue: 0.16, alpha: 1.0)
+                    : NSColor(srgbRed: 0.95, green: 0.97, blue: 1.00, alpha: 1.0)
             } else {
-                labelColor = .secondaryLabelColor
+                labelColor = lightBackground
+                    ? NSColor(srgbRed: 0.39, green: 0.45, blue: 0.55, alpha: 1.0)
+                    : NSColor(srgbRed: 0.55, green: 0.62, blue: 0.72, alpha: 1.0)
             }
 
             let attrs: [NSAttributedString.Key: Any] = [
@@ -459,6 +514,13 @@ public final class AutoCompletePopupController: NSObject, NSTableViewDataSource,
 
 public final class LaTeXEditorTextView: NSTextView {
     public var onDropImageFile: ((URL) -> Void)?
+    public var lightBackground: Bool = true {
+        didSet {
+            if oldValue != lightBackground {
+                needsDisplay = true
+            }
+        }
+    }
 
     public var ghostSuffix: String = "" {
         didSet {
@@ -479,6 +541,34 @@ public final class LaTeXEditorTextView: NSTextView {
             }
         }
         return super.performDragOperation(sender)
+    }
+
+    public override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+
+        // Highlight active cursor line across the editor width when no selection is active
+        let sel = selectedRange()
+        guard sel.length == 0,
+              let layoutManager = self.layoutManager
+        else { return }
+
+        let nsString = self.string as NSString
+        guard sel.location <= nsString.length && nsString.length > 0 else { return }
+
+        let safeCharIdx = min(sel.location, max(0, nsString.length - 1))
+        let glyphIdx = layoutManager.glyphIndexForCharacter(at: safeCharIdx)
+        var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIdx, effectiveRange: nil)
+        if lineRect.height > 0 {
+            lineRect.origin.y += textContainerInset.height
+            lineRect.origin.x = 0
+            lineRect.size.width = bounds.width
+
+            let activeLineColor = lightBackground
+                ? NSColor(srgbRed: 0.94, green: 0.96, blue: 0.99, alpha: 1.0) // Subtle cool highlight #F0F5FC
+                : NSColor(srgbRed: 0.10, green: 0.13, blue: 0.19, alpha: 1.0)
+            activeLineColor.setFill()
+            lineRect.intersection(bounds).fill()
+        }
     }
 
     public override func draw(_ dirtyRect: NSRect) {
@@ -523,9 +613,12 @@ public final class LaTeXEditorTextView: NSTextView {
 
         // Only render the first line of the ghost suffix inline so multiline completions stay clean
         let firstLineGhost = ghostSuffix.components(separatedBy: .newlines).first ?? ghostSuffix
+        let ghostColor = lightBackground
+            ? NSColor(srgbRed: 0.52, green: 0.58, blue: 0.68, alpha: 1.0)
+            : NSColor(srgbRed: 0.45, green: 0.52, blue: 0.62, alpha: 1.0)
         let ghostAttrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular),
-            .foregroundColor: NSColor.placeholderTextColor
+            .foregroundColor: ghostColor
         ]
         (firstLineGhost as NSString).draw(at: charPoint, withAttributes: ghostAttrs)
     }
@@ -537,6 +630,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
     @Binding public var jumpToLineRequest: Int?
     public var diagnostics: [LaTeXDiagnostic]
     public var fontSize: CGFloat
+    public var lightBackground: Bool
     public var onDropImageFile: ((URL) -> Void)?
 
     public init(
@@ -545,6 +639,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         jumpToLineRequest: Binding<Int?>,
         diagnostics: [LaTeXDiagnostic],
         fontSize: CGFloat = 13.5,
+        lightBackground: Bool = true,
         onDropImageFile: ((URL) -> Void)? = nil
     ) {
         self._text = text
@@ -552,11 +647,34 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         self._jumpToLineRequest = jumpToLineRequest
         self.diagnostics = diagnostics
         self.fontSize = fontSize
+        self.lightBackground = lightBackground
         self.onDropImageFile = onDropImageFile
     }
 
     public func makeCoordinator() -> Coordinator {
         Coordinator(self)
+    }
+
+    private func applyTheme(to scrollView: NSScrollView, textView: LaTeXEditorTextView, gutter: LineNumberGutterView?) {
+        let bg = lightBackground
+            ? NSColor(srgbRed: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
+            : NSColor(srgbRed: 0.05, green: 0.07, blue: 0.09, alpha: 1.0)
+        scrollView.appearance = NSAppearance(named: lightBackground ? .aqua : .darkAqua)
+        scrollView.drawsBackground = true
+        scrollView.backgroundColor = bg
+
+        textView.lightBackground = lightBackground
+        textView.drawsBackground = true
+        textView.backgroundColor = bg
+        textView.insertionPointColor = lightBackground
+            ? NSColor(srgbRed: 0.06, green: 0.09, blue: 0.16, alpha: 1.0)
+            : NSColor.white
+        textView.selectedTextAttributes = [
+            .backgroundColor: lightBackground
+                ? NSColor(srgbRed: 0.74, green: 0.85, blue: 1.0, alpha: 0.65)
+                : NSColor(srgbRed: 0.18, green: 0.36, blue: 0.65, alpha: 0.65)
+        ]
+        gutter?.lightBackground = lightBackground
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
@@ -589,7 +707,6 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         textView.allowsUndo = true
         textView.usesFindBar = true
         textView.textContainerInset = NSSize(width: 8, height: 10)
-        textView.backgroundColor = NSColor.textBackgroundColor
         textView.delegate = context.coordinator
         textView.onDropImageFile = onDropImageFile
 
@@ -602,9 +719,13 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
 
         context.coordinator.textView = textView
         context.coordinator.gutterView = gutter
+        context.coordinator.lastFontSize = fontSize
+        context.coordinator.lastLightBackground = lightBackground
+
+        applyTheme(to: scrollView, textView: textView, gutter: gutter)
 
         textView.string = text
-        LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: fontSize)
+        LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: fontSize, lightBackground: lightBackground)
         context.coordinator.updateDiagnostics(diagnostics)
 
         // Observe scroll notifications to redraw line numbers and hide popup on scroll
@@ -625,11 +746,23 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
               let textStorage = textView.textStorage
         else { return }
 
-        if textView.string != text && !context.coordinator.isEditingText {
+        let themeOrFontChanged = (context.coordinator.lastLightBackground != lightBackground) ||
+                                 (context.coordinator.lastFontSize != fontSize)
+
+        if themeOrFontChanged {
+            context.coordinator.lastLightBackground = lightBackground
+            context.coordinator.lastFontSize = fontSize
+            applyTheme(to: scrollView, textView: textView, gutter: context.coordinator.gutterView)
+        }
+
+        if (textView.string != text && !context.coordinator.isEditingText) || themeOrFontChanged {
             let selectedRanges = textView.selectedRanges
-            textView.string = text
-            LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: fontSize)
+            if textView.string != text {
+                textView.string = text
+            }
+            LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: fontSize, lightBackground: lightBackground)
             textView.selectedRanges = selectedRanges
+            textView.needsDisplay = true
             context.coordinator.gutterView?.needsDisplay = true
         }
 
@@ -649,6 +782,8 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         weak var textView: LaTeXEditorTextView?
         weak var gutterView: LineNumberGutterView?
         var isEditingText = false
+        var lastFontSize: CGFloat = 13.5
+        var lastLightBackground: Bool = true
 
         let popupController = AutoCompletePopupController()
         var activeQuery: CompletionQueryContext?
@@ -675,15 +810,21 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
             isEditingText = true
             let newString = textView.string
             parent.text = newString
-            LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: parent.fontSize)
+            LaTeXSyntaxHighlighter.shared.highlight(
+                textStorage: textStorage,
+                fontSize: parent.fontSize,
+                lightBackground: parent.lightBackground
+            )
             updateCursorLine()
             refreshAutoComplete()
+            textView.needsDisplay = true
             gutterView?.needsDisplay = true
             isEditingText = false
         }
 
         public func textViewDidChangeSelection(_ notification: Notification) {
             updateCursorLine()
+            textView?.needsDisplay = true
             if !isEditingText {
                 // Hide autocomplete when user clicks elsewhere or moves cursor outside active token
                 refreshAutoComplete(onlyUpdateIfAlreadyVisible: true)
@@ -822,8 +963,13 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
                 textView.setSelectedRange(NSRange(location: newCursorLocation, length: 0))
 
                 parent.text = textView.string
-                LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: parent.fontSize)
+                LaTeXSyntaxHighlighter.shared.highlight(
+                    textStorage: textStorage,
+                    fontSize: parent.fontSize,
+                    lightBackground: parent.lightBackground
+                )
                 updateCursorLine()
+                textView.needsDisplay = true
                 gutterView?.needsDisplay = true
                 isEditingText = false
             }

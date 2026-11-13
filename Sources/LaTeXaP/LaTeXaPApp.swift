@@ -172,6 +172,10 @@ struct LaTeXaPApp: App {
             }
 
             CommandMenu("View") {
+                Toggle("Light Editor Background", isOn: $viewModel.useLightEditorBackground)
+
+                Divider()
+
                 Button("Increase Editor Font Size") {
                     viewModel.editorFontSize = min(24, viewModel.editorFontSize + 1)
                 }

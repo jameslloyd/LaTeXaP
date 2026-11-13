@@ -471,7 +471,7 @@ public struct MainWorkspaceView: View {
 
     private var editorPane: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 8) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .foregroundStyle(.secondary)
                 Text(viewModel.currentFileURL?.lastPathComponent ?? "Untitled.tex")
@@ -480,6 +480,19 @@ public struct MainWorkspaceView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
+
+                Button {
+                    viewModel.useLightEditorBackground.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: viewModel.useLightEditorBackground ? "sun.max.fill" : "moon.fill")
+                        Text(viewModel.useLightEditorBackground ? "Light" : "Dark")
+                    }
+                    .font(.system(size: 10.5, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .help("Switch LaTeX Editor between Crisp White Paper and High-Contrast Dark background")
+
                 Text("Line \(viewModel.cursorLine)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -496,6 +509,7 @@ public struct MainWorkspaceView: View {
                 jumpToLineRequest: $viewModel.jumpToLineRequest,
                 diagnostics: viewModel.diagnostics,
                 fontSize: viewModel.editorFontSize,
+                lightBackground: viewModel.useLightEditorBackground,
                 onDropImageFile: { droppedURL in
                     viewModel.handleDroppedImageURL(droppedURL)
                 }

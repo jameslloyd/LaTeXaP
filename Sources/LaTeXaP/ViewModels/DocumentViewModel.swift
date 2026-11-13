@@ -39,6 +39,7 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var showConsoleDrawer: Bool = true
     @Published public var showSidebar: Bool = true
     @Published public var editorFontSize: CGFloat = 13.5
+    @Published public var useLightEditorBackground: Bool = true
     @Published public var selectedSidebarTab: String = "Outline"
     @Published public var packageSearchText: String = ""
     @Published public var selectedDiagnosticTab: Int = 2
