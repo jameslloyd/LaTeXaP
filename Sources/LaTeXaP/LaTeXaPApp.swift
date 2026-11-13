@@ -72,6 +72,13 @@ struct LaTeXaPApp: App {
         WindowGroup("LaTeXaP — Modern LaTeX3 Studio") {
             MainWorkspaceView(viewModel: viewModel)
                 .frame(minWidth: 980, minHeight: 640)
+                .onAppear {
+                    if ProcessInfo.processInfo.environment["LATEXAP_EXPORT_SCREENSHOTS"] == "1" {
+                        Task { @MainActor in
+                            await Self.exportScreenshots(viewModel: viewModel)
+                        }
+                    }
+                }
         }
         .defaultSize(width: 1360, height: 860)
         .commands {
@@ -166,5 +173,57 @@ struct LaTeXaPApp: App {
                 .keyboardShortcut("-", modifiers: [.command])
             }
         }
+    }
+
+    @MainActor
+    private static func exportScreenshots(viewModel: DocumentViewModel) async {
+        let outDir = URL(fileURLWithPath: "/Users/james/code/LaTeXaP/docs/screenshots")
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        // Wait for initial compilation & PDF render
+        try? await Task.sleep(nanoseconds: 2_600_000_000)
+
+        func snapshotWindow(to filename: String) {
+            guard let window = NSApplication.shared.windows.first(where: { $0.isVisible && $0.frame.width > 600 }),
+                  let contentView = window.contentView?.superview ?? window.contentView
+            else { return }
+            let bounds = contentView.bounds
+            guard let rep = contentView.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+            contentView.cacheDisplay(in: bounds, to: rep)
+            if let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: outDir.appendingPathComponent(filename))
+            }
+        }
+
+        // 1. Main Workspace: LaTeX3 Showcase + Outline + Context Suggestions Drawer
+        viewModel.loadTemplate(LaTeXCatalog.defaultTemplate)
+        viewModel.selectedSidebarTab = "Outline"
+        viewModel.showConsoleDrawer = true
+        viewModel.selectedDiagnosticTab = 2
+        viewModel.cursorLine = 32
+        try? await Task.sleep(nanoseconds: 2_800_000_000)
+        snapshotWindow(to: "01-latex3-studio-workspace.png")
+
+        // 2. Academic Research Article Template + Packages Sidebar (showing Python & LaTeX3 packages)
+        if let academic = LaTeXCatalog.templates.first(where: { $0.id == "academic-paper" }) {
+            viewModel.loadTemplate(academic)
+        }
+        viewModel.selectedSidebarTab = "Packages"
+        viewModel.packageSearchText = ""
+        viewModel.showConsoleDrawer = false
+        try? await Task.sleep(nanoseconds: 2_800_000_000)
+        snapshotWindow(to: "02-academic-paper-and-packages.png")
+
+        // 3. Python & Scientific Computing Template + LaTeX3 Snippets Sidebar
+        if let pythonTpl = LaTeXCatalog.templates.first(where: { $0.id == "python-scientific" }) {
+            viewModel.loadTemplate(pythonTpl)
+        }
+        viewModel.selectedSidebarTab = "LaTeX3"
+        viewModel.showConsoleDrawer = true
+        viewModel.selectedDiagnosticTab = 0
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        snapshotWindow(to: "03-python-scientific-and-snippets.png")
+
+        NSApplication.shared.terminate(nil)
     }
 }
