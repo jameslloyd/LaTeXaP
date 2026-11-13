@@ -59,6 +59,9 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var tableCaptionText: String = "Empirical performance comparison."
     @Published public var tableLabelText: String = "tab:comparison"
 
+    // Non-intrusive GitHub release update notification state
+    @Published public var availableUpdate: AppReleaseUpdate?
+
     private let tectonicService = TectonicService()
     private var debounceTask: Task<Void, Never>?
     private var lastCompilerDiagnostics: [LaTeXDiagnostic] = []
@@ -68,6 +71,15 @@ public final class DocumentViewModel: ObservableObject {
         refreshDerivedMetadata()
         Task {
             await compileNow()
+        }
+        checkForUpdatesSilently()
+    }
+
+    public func checkForUpdatesSilently() {
+        Task { [weak self] in
+            if let update = await UpdateCheckerService.checkForUpdate(currentVersion: AppMetadata.version) {
+                self?.availableUpdate = update
+            }
         }
     }
 

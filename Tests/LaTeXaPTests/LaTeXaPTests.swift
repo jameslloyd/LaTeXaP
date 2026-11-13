@@ -229,4 +229,27 @@ struct LaTeXaPTests {
         #expect(table.contains("GD & Linear \\\\"))
         #expect(table.contains("\\bottomrule"))
     }
+
+    @Test func updateCheckerVersionComparisonAndJSONParsing() {
+        #expect(UpdateCheckerService.isVersion("0.1.2", newerThan: "0.1.1"))
+        #expect(UpdateCheckerService.isVersion("v0.2", newerThan: "0.1.1"))
+        #expect(!UpdateCheckerService.isVersion("0.1.1", newerThan: "0.1.1"))
+        #expect(!UpdateCheckerService.isVersion("0.1.0", newerThan: "0.1.1"))
+
+        let sampleReleaseJSON = """
+        {
+          "tag_name": "v0.2.0",
+          "html_url": "https://github.com/jameslloyd/LaTeXaP/releases/tag/v0.2.0",
+          "draft": false
+        }
+        """.data(using: .utf8)!
+
+        let update = UpdateCheckerService.parseReleaseJSON(data: sampleReleaseJSON, currentVersion: "0.1.1")
+        #expect(update != nil)
+        #expect(update?.latestVersion == "0.2.0")
+        #expect(update?.tagName == "v0.2.0")
+
+        let noUpdate = UpdateCheckerService.parseReleaseJSON(data: sampleReleaseJSON, currentVersion: "0.2.0")
+        #expect(noUpdate == nil)
+    }
 }

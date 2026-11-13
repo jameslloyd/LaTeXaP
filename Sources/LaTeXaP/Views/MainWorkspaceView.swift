@@ -100,6 +100,25 @@ public struct MainWorkspaceView: View {
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
+                if let update = viewModel.availableUpdate {
+                    Button {
+                        NSWorkspace.shared.open(update.htmlURL)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .foregroundStyle(.blue)
+                            Text("Update v\(update.latestVersion)")
+                                .font(.caption.weight(.semibold))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.blue.opacity(0.14))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("LaTeXaP \(update.tagName) is available on GitHub — click to view release")
+                }
+
                 Button {
                     viewModel.showVisualToolsSheet = true
                 } label: {
