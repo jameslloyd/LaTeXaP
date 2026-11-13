@@ -55,12 +55,24 @@
 
 ---
 
-## Download & Build
+## Installation
 
-### Download Release Binary
-Download the latest prebuilt `LaTeXaP-v0.1.1-macOS.zip` from [GitHub Releases](https://github.com/jameslloyd/LaTeXaP/releases).
+### Option 1: Install Prebuilt macOS App (Recommended)
+1. **Download**: Grab the latest `LaTeXaP-v0.1.1-macOS.zip` archive from [**GitHub Releases**](https://github.com/jameslloyd/LaTeXaP/releases).
+2. **Unzip**: Double-click `LaTeXaP-v0.1.1-macOS.zip` in Finder (or run `unzip LaTeXaP-v0.1.1-macOS.zip`) to extract **`LaTeXaP.app`**.
+3. **Move to Applications**: Drag **`LaTeXaP.app`** into your **`/Applications`** folder.
+4. **Launch**: Open **LaTeXaP** from `/Applications` or Spotlight (`⌘Space`).
+   - *Note*: The `.app` bundle includes the embedded **Tectonic** typesetting engine, so no separate TeX Live or MacTeX installation is required.
+   - *macOS Gatekeeper tip*: Because the release binary is ad-hoc signed, if macOS prompts that the developer cannot be verified on first launch, **Right-Click (or Control-Click) `LaTeXaP.app` → Open**, or run:
+     ```bash
+     xattr -cr /Applications/LaTeXaP.app
+     ```
 
-### Run from Source
+---
+
+## Building from Source
+
+### Run Directly via Swift Package Manager
 ```bash
 git clone https://github.com/jameslloyd/LaTeXaP.git
 cd LaTeXaP
