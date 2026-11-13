@@ -56,9 +56,9 @@ cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1</string>
+    <string>0.1.1</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>NSHumanReadableCopyright</key>
     <string>https://github.com/jameslloyd/LaTeXaP.git</string>
     <key>LSMinimumSystemVersion</key>
@@ -74,7 +74,7 @@ EOF
 touch "$APP_DIR"
 echo "Created macOS application bundle at: $APP_DIR"
 
-ZIP_PATH="$PROJECT_DIR/build/LaTeXaP-v0.1-macOS.zip"
+ZIP_PATH="$PROJECT_DIR/build/LaTeXaP-v0.1.1-macOS.zip"
 rm -f "$ZIP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"
 echo "Created release zip archive at: $ZIP_PATH"

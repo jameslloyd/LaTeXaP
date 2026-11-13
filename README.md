@@ -58,7 +58,7 @@
 ## Download & Build
 
 ### Download Release Binary
-Download the latest prebuilt `LaTeXaP-v0.1-macOS.zip` from [GitHub Releases](https://github.com/jameslloyd/LaTeXaP/releases).
+Download the latest prebuilt `LaTeXaP-v0.1.1-macOS.zip` from [GitHub Releases](https://github.com/jameslloyd/LaTeXaP/releases).
 
 ### Run from Source
 ```bash

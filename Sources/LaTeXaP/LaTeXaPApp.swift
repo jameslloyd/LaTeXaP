@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 enum AppMetadata {
-    static let version = "0.1"
-    static let build = "1"
+    static let version = "0.1.1"
+    static let build = "2"
     static let repoURLString = "https://github.com/jameslloyd/LaTeXaP"
     static let repoGitURLString = "https://github.com/jameslloyd/LaTeXaP.git"
     static let repoURL = URL(string: "https://github.com/jameslloyd/LaTeXaP")!
