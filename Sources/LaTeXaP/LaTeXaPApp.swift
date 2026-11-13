@@ -95,6 +95,13 @@ struct LaTeXaPApp: App {
             }
 
             CommandGroup(replacing: .help) {
+                Button("LaTeXaP Version \(AppMetadata.version) (Build \(AppMetadata.build))") {
+                    AppMetadata.showAboutPanel()
+                }
+                Button("Check for Updates...") {
+                    viewModel.checkForUpdatesSilently()
+                }
+                Divider()
                 Button("LaTeXaP on GitHub (https://github.com/jameslloyd/LaTeXaP.git)") {
                     NSWorkspace.shared.open(AppMetadata.repoURL)
                 }
