@@ -3,6 +3,7 @@ import SwiftUI
 enum SidebarTab: String, CaseIterable, Identifiable {
     case outline = "Outline"
     case packages = "Packages"
+    case bibliography = "BibTeX"
     case snippets = "LaTeX3"
     case templates = "Templates"
 
@@ -11,6 +12,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         switch self {
         case .outline: return "list.bullet.indent"
         case .packages: return "shippingbox"
+        case .bibliography: return "books.vertical"
         case .snippets: return "curlybraces.square"
         case .templates: return "doc.on.doc"
         }
@@ -99,6 +101,20 @@ public struct MainWorkspaceView: View {
 
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
+                    viewModel.showVisualToolsSheet = true
+                } label: {
+                    Label("Math & Tables", systemImage: "function")
+                }
+                .help("Open Visual Math Symbol Palette, Matrix Generator & CSV Table Builder")
+
+                Button {
+                    viewModel.importFigureViaPanel()
+                } label: {
+                    Label("Insert Figure", systemImage: "photo.badge.plus")
+                }
+                .help("Import an image or PDF figure (or drag-and-drop into the editor)")
+
+                Button {
                     withAnimation(.easeInOut(duration: 0.15)) {
                         viewModel.showConsoleDrawer.toggle()
                     }
@@ -116,6 +132,9 @@ public struct MainWorkspaceView: View {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .help("Export compiled PDF document (⇧⌘E)")
             }
+        }
+        .sheet(isPresented: $viewModel.showVisualToolsSheet) {
+            VisualToolsSheetView(viewModel: viewModel)
         }
     }
 
@@ -140,6 +159,8 @@ public struct MainWorkspaceView: View {
                 outlineTabView
             case .packages:
                 packagesTabView
+            case .bibliography:
+                bibliographyTabView
             case .snippets:
                 snippetsTabView
             case .templates:
@@ -258,6 +279,107 @@ public struct MainWorkspaceView: View {
         }
     }
 
+    private var bibliographyTabView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("FETCH BY DOI OR ARXIV ID")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 6) {
+                    TextField("e.g. 10.1145/... or 2305.12345", text: $viewModel.bibLookupQuery)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            viewModel.fetchAndAppendBibEntry()
+                        }
+
+                    Button {
+                        viewModel.fetchAndAppendBibEntry()
+                    } label: {
+                        if viewModel.isFetchingBib {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.down.doc.fill")
+                        }
+                    }
+                    .disabled(viewModel.bibLookupQuery.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isFetchingBib)
+                    .help("Fetch BibTeX entry from DOI or arXiv and append to bibliography")
+                }
+
+                if let err = viewModel.bibLookupError {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
+            }
+            .padding(10)
+
+            Divider()
+
+            Text("CITATIONS (\(viewModel.bibEntries.count)) & LABELS (\(viewModel.documentLabels.count))")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+
+            List {
+                if !viewModel.bibEntries.isEmpty {
+                    Section("Bibliography Keys (\\cite{...})") {
+                        ForEach(viewModel.bibEntries) { entry in
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Text(entry.key)
+                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(.pink)
+                                    if !entry.year.isEmpty {
+                                        Text(entry.year)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("Cite") {
+                                        viewModel.insertInlineText("\\cite{\(entry.key)}")
+                                    }
+                                    .controlSize(.mini)
+                                }
+                                Text(entry.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                if !viewModel.documentLabels.isEmpty {
+                    Section("Cross-Reference Labels (\\ref{...})") {
+                        ForEach(viewModel.documentLabels) { item in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.label)
+                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(.cyan)
+                                    Text("Line \(item.line) • \(item.contextPreview)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                Button("\\ref") {
+                                    viewModel.insertInlineText("\\ref{\(item.label)}")
+                                }
+                                .controlSize(.mini)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+        }
+    }
+
     private var snippetsTabView: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("LATEX3 (EXPL3 & XPARSE) SNIPPETS")
@@ -354,7 +476,10 @@ public struct MainWorkspaceView: View {
                 cursorLine: $viewModel.cursorLine,
                 jumpToLineRequest: $viewModel.jumpToLineRequest,
                 diagnostics: viewModel.diagnostics,
-                fontSize: viewModel.editorFontSize
+                fontSize: viewModel.editorFontSize,
+                onDropImageFile: { droppedURL in
+                    viewModel.handleDroppedImageURL(droppedURL)
+                }
             )
         }
     }
@@ -500,7 +625,20 @@ public struct MainWorkspaceView: View {
 
             Spacer()
 
-            Text("Engine: Tectonic (XeTeX + LaTeX3 / L3 programming layer + SyncTeX)")
+            HStack(spacing: 12) {
+                Text("\(viewModel.documentStats.wordCount) words")
+                Text("•")
+                Text("\(viewModel.documentStats.mathCount) math")
+                Text("•")
+                Text("\(viewModel.documentStats.expl3SymbolCount) expl3")
+            }
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.secondary)
+
+            Text("|")
+                .foregroundStyle(.quaternary)
+
+            Text("Engine: Tectonic (XeTeX + LaTeX3 + SyncTeX)")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }

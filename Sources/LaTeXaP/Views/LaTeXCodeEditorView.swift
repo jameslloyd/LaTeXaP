@@ -447,6 +447,8 @@ public final class AutoCompletePopupController: NSObject, NSTableViewDataSource,
         case "math": return .systemBlue
         case "pkg": return .systemOrange
         case "python": return .systemYellow
+        case "bib": return .systemPink
+        case "ref": return .systemCyan
         case "user": return .systemGreen
         default: return .secondaryLabelColor
         }
@@ -456,12 +458,27 @@ public final class AutoCompletePopupController: NSObject, NSTableViewDataSource,
 // MARK: - Custom NSTextView withInline Ghost Text & Auto-Pair
 
 public final class LaTeXEditorTextView: NSTextView {
+    public var onDropImageFile: ((URL) -> Void)?
+
     public var ghostSuffix: String = "" {
         didSet {
             if oldValue != ghostSuffix {
                 needsDisplay = true
             }
         }
+    }
+
+    public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pboard = sender.draggingPasteboard
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let first = urls.first {
+            let ext = first.pathExtension.lowercased()
+            if ["png", "jpg", "jpeg", "pdf", "tiff"].contains(ext) {
+                onDropImageFile?(first)
+                return true
+            }
+        }
+        return super.performDragOperation(sender)
     }
 
     public override func draw(_ dirtyRect: NSRect) {
@@ -520,19 +537,22 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
     @Binding public var jumpToLineRequest: Int?
     public var diagnostics: [LaTeXDiagnostic]
     public var fontSize: CGFloat
+    public var onDropImageFile: ((URL) -> Void)?
 
     public init(
         text: Binding<String>,
         cursorLine: Binding<Int>,
         jumpToLineRequest: Binding<Int?>,
         diagnostics: [LaTeXDiagnostic],
-        fontSize: CGFloat = 13.5
+        fontSize: CGFloat = 13.5,
+        onDropImageFile: ((URL) -> Void)? = nil
     ) {
         self._text = text
         self._cursorLine = cursorLine
         self._jumpToLineRequest = jumpToLineRequest
         self.diagnostics = diagnostics
         self.fontSize = fontSize
+        self.onDropImageFile = onDropImageFile
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -571,6 +591,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 8, height: 10)
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.delegate = context.coordinator
+        textView.onDropImageFile = onDropImageFile
 
         scrollView.documentView = textView
 

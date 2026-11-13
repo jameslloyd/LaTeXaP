@@ -9,7 +9,7 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var sourceText: String {
         didSet {
             if sourceText != oldValue {
-                outlineItems = OutlineParser.parse(source: sourceText)
+                refreshDerivedMetadata()
                 if autoCompileEnabled {
                     scheduleDebouncedCompilation()
                 }
@@ -25,11 +25,15 @@ public final class DocumentViewModel: ObservableObject {
 
     @Published public var compilationState: CompilationState = .idle
     @Published public var diagnostics: [LaTeXDiagnostic] = []
+    @Published public var staticLintWarnings: [LaTeXDiagnostic] = []
     @Published public var consoleLog: String = ""
     @Published public var pdfURL: URL?
     @Published public var pdfRevision: Int = 0
     @Published public var synctexData: SyncTeXData?
     @Published public var outlineItems: [DocumentOutlineItem] = []
+    @Published public var bibEntries: [BibEntry] = []
+    @Published public var documentLabels: [DocumentLabelItem] = []
+    @Published public var documentStats: DocumentStats = DocumentStats()
 
     @Published public var autoCompileEnabled: Bool = true
     @Published public var showConsoleDrawer: Bool = true
@@ -39,15 +43,41 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var packageSearchText: String = ""
     @Published public var selectedDiagnosticTab: Int = 2
 
+    // BibTeX DOI / arXiv lookup state
+    @Published public var bibLookupQuery: String = ""
+    @Published public var isFetchingBib: Bool = false
+    @Published public var bibLookupError: String?
+
+    // Visual Math / Matrix / Table Builder sheet state
+    @Published public var showVisualToolsSheet: Bool = false
+    @Published public var visualToolTab: Int = 0
+    @Published public var matrixEnvType: String = "pmatrix"
+    @Published public var matrixRows: Int = 3
+    @Published public var matrixCols: Int = 3
+    @Published public var matrixIdentityFill: Bool = false
+    @Published public var csvInputText: String = "Method, Complexity, Rate\nGradient Descent, O(k log(1/e)), Linear\nNesterov AGD, O(sqrt(k) log(1/e)), Accelerated"
+    @Published public var tableCaptionText: String = "Empirical performance comparison."
+    @Published public var tableLabelText: String = "tab:comparison"
+
     private let tectonicService = TectonicService()
     private var debounceTask: Task<Void, Never>?
+    private var lastCompilerDiagnostics: [LaTeXDiagnostic] = []
 
     public init(initialTemplate: LaTeXTemplate = LaTeXCatalog.defaultTemplate) {
         self.sourceText = initialTemplate.content
-        self.outlineItems = OutlineParser.parse(source: initialTemplate.content)
+        refreshDerivedMetadata()
         Task {
             await compileNow()
         }
+    }
+
+    private func refreshDerivedMetadata() {
+        outlineItems = OutlineParser.parse(source: sourceText)
+        bibEntries = BibliographyService.extractEntries(fromSource: sourceText)
+        documentLabels = BibliographyService.extractLabels(from: sourceText)
+        documentStats = Expl3Linter.computeStatistics(source: sourceText)
+        staticLintWarnings = Expl3Linter.lint(source: sourceText)
+        diagnostics = lastCompilerDiagnostics + staticLintWarnings
     }
 
     public func scheduleDebouncedCompilation() {
@@ -68,7 +98,8 @@ public final class DocumentViewModel: ObservableObject {
 
         let result = await tectonicService.compile(source: codeSnapshot, documentDirectory: docDir)
 
-        diagnostics = result.diagnostics
+        lastCompilerDiagnostics = result.diagnostics
+        diagnostics = lastCompilerDiagnostics + staticLintWarnings
         consoleLog = result.logOutput
 
         if result.success, let url = result.pdfURL {
@@ -107,11 +138,26 @@ public final class DocumentViewModel: ObservableObject {
     }
 
     public func insertSnippet(_ snippet: LaTeXSnippet) {
+        insertRawBlock(snippet.code)
+    }
+
+    public func insertRawBlock(_ block: String) {
         let lines = sourceText.components(separatedBy: .newlines)
         let targetIndex = max(0, min(lines.count, cursorLine))
         var updated = lines
-        updated.insert(snippet.code, at: targetIndex)
+        updated.insert(block, at: targetIndex)
         sourceText = updated.joined(separator: "\n")
+    }
+
+    public func insertInlineText(_ token: String) {
+        var lines = sourceText.components(separatedBy: .newlines)
+        guard !lines.isEmpty else {
+            sourceText = token
+            return
+        }
+        let idx = max(0, min(lines.count - 1, cursorLine - 1))
+        lines[idx] += " \(token)"
+        sourceText = lines.joined(separator: "\n")
     }
 
     public func insertPackage(_ pkg: LaTeXPackagePreset) {
@@ -137,13 +183,79 @@ public final class DocumentViewModel: ObservableObject {
             if sourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 sourceText = snippet
             } else {
-                let lines = sourceText.components(separatedBy: .newlines)
-                let targetIndex = max(0, min(lines.count, cursorLine))
-                var updated = lines
-                updated.insert(snippet, at: targetIndex)
-                sourceText = updated.joined(separator: "\n")
+                insertRawBlock(snippet)
             }
         }
+    }
+
+    // MARK: - BibTeX DOI / arXiv Fetch & Citation Insertion
+
+    public func fetchAndAppendBibEntry() {
+        let query = bibLookupQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        isFetchingBib = true
+        bibLookupError = nil
+
+        Task {
+            do {
+                let entry = try await BibliographyService.fetchBibTeX(identifier: query)
+                appendBibItemToSource(entry)
+                bibLookupQuery = ""
+            } catch {
+                bibLookupError = "Could not fetch DOI/arXiv entry: \(error.localizedDescription)"
+            }
+            isFetchingBib = false
+        }
+    }
+
+    public func appendBibItemToSource(_ entry: BibEntry) {
+        let formattedItem = """
+\\bibitem{\(entry.key)}
+\(entry.author), ``\(entry.title),'' \(entry.year).
+"""
+        if let range = sourceText.range(of: "\\end{thebibliography}") {
+            sourceText.replaceSubrange(range, with: "\(formattedItem)\n\\end{thebibliography}")
+        } else if let endDocRange = sourceText.range(of: "\\end{document}") {
+            let bibSection = """
+
+\\begin{thebibliography}{9}
+\(formattedItem)
+\\end{thebibliography}
+
+\\end{document}
+"""
+            sourceText.replaceSubrange(endDocRange, with: bibSection)
+        } else {
+            sourceText += "\n\(formattedItem)\n"
+        }
+    }
+
+    // MARK: - Figure / Image Import Assistant
+
+    public func importFigureViaPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Insert Image or PDF Figure"
+        panel.allowedContentTypes = [.png, .jpeg, .pdf, .tiff]
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            handleDroppedImageURL(url)
+        }
+    }
+
+    public func handleDroppedImageURL(_ url: URL) {
+        if let graphicxPreset = LaTeXCatalog.commonPackages.first(where: { $0.package == "graphicx" }) {
+            insertPackage(graphicxPreset)
+        }
+        let fileName = url.deletingPathExtension().lastPathComponent
+        let figureBlock = """
+\\begin{figure}[htbp]
+  \\centering
+  \\includegraphics[width=0.75\\textwidth]{\(url.path)}
+  \\caption{Caption for \(fileName.replacingOccurrences(of: "_", with: " ")).}
+  \\label{fig:\(fileName.lowercased())}
+\\end{figure}
+"""
+        insertRawBlock(figureBlock)
     }
 
     // MARK: - File Operations (Open / Save / Export PDF)

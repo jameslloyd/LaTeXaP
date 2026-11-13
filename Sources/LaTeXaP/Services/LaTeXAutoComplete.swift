@@ -798,9 +798,9 @@ public enum LaTeXAutoCompleteEngine {
             }
         }
 
-        // Case 1: Cursor is inside \begin{prefix, \end{prefix, or \usepackage{prefix
+        // Case 1: Cursor is inside \begin{prefix, \end{prefix, \usepackage{prefix, \cite{prefix, or \ref{prefix
         if let braceMatch = linePrefix.range(
-            of: #"\\(begin|end|usepackage)(?:\[[^\]]*\])?\{([a-zA-Z0-9_*:]*)$"#,
+            of: #"\\(begin|end|usepackage|cite|citep|citet|parencite|ref|eqref|cref)(?:\[[^\]]*\])?\{([a-zA-Z0-9_*:.-]*)$"#,
             options: .regularExpression
         ) {
             let matchedSub = String(linePrefix[braceMatch])
@@ -810,7 +810,9 @@ public enum LaTeXAutoCompleteEngine {
                 let cmdName: String
                 if cmdPart.hasPrefix("\\begin") { cmdName = "begin" }
                 else if cmdPart.hasPrefix("\\end") { cmdName = "end" }
-                else { cmdName = "usepackage" }
+                else if cmdPart.hasPrefix("\\usepackage") { cmdName = "usepackage" }
+                else if cmdPart.contains("cite") { cmdName = "cite" }
+                else { cmdName = "ref" }
 
                 // For \begin{...}, replace from the `\` of `\begin{...` so we can expand the entire `\begin{env}...\end{env}`
                 if cmdName == "begin" {
@@ -871,6 +873,42 @@ public enum LaTeXAutoCompleteEngine {
                         category: "pkg",
                         detail: pkg.description,
                         insertText: "\(pkg.package)|"
+                    )
+                }
+        }
+
+        // 1b. Inside \cite{...}, \citep{...}, \citet{...}
+        if query.enclosingCommand == "cite" {
+            let filter = query.prefix.lowercased()
+            let entries = BibliographyService.extractEntries(fromSource: source)
+            return entries
+                .filter { filter.isEmpty || $0.key.lowercased().contains(filter) || $0.title.lowercased().contains(filter) }
+                .map { entry in
+                    LaTeXCompletionItem(
+                        trigger: entry.key,
+                        displayTitle: entry.key,
+                        signature: entry.year.isEmpty ? "" : "(\(entry.year))",
+                        category: "bib",
+                        detail: "\(entry.author) — \(entry.title)",
+                        insertText: "\(entry.key)|"
+                    )
+                }
+        }
+
+        // 1c. Inside \ref{...}, \eqref{...}, \cref{...}
+        if query.enclosingCommand == "ref" {
+            let filter = query.prefix.lowercased()
+            let labels = BibliographyService.extractLabels(from: source)
+            return labels
+                .filter { filter.isEmpty || $0.label.lowercased().contains(filter) }
+                .map { item in
+                    LaTeXCompletionItem(
+                        trigger: item.label,
+                        displayTitle: item.label,
+                        signature: "L\(item.line)",
+                        category: "ref",
+                        detail: item.contextPreview,
+                        insertText: "\(item.label)|"
                     )
                 }
         }

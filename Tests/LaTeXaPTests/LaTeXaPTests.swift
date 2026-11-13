@@ -143,4 +143,90 @@ struct LaTeXaPTests {
         #expect(pythonPackages.contains(where: { $0.package == "minted" }))
         #expect(pythonPackages.contains(where: { $0.package == "listings" }))
     }
+
+    @Test func bibliographyAndCrossRefAutoComplete() {
+        let doc = #"""
+        \documentclass{article}
+        \begin{document}
+        \section{Intro}\label{sec:intro}
+        \begin{equation}\label{eq:euler}
+          e^{i\pi} + 1 = 0
+        \end{equation}
+        See \ref{eq:
+        \begin{thebibliography}{9}
+        \bibitem{nesterov1983}
+        Y. Nesterov, ``Accelerated method,'' 1983.
+        \end{thebibliography}
+        \end{document}
+        """#
+
+        let entries = BibliographyService.extractEntries(fromSource: doc)
+        #expect(entries.count == 1)
+        #expect(entries.first?.key == "nesterov1983")
+        #expect(entries.first?.year == "1983")
+
+        let labels = BibliographyService.extractLabels(from: doc)
+        #expect(labels.count == 2)
+        #expect(labels.contains(where: { $0.label == "sec:intro" }))
+        #expect(labels.contains(where: { $0.label == "eq:euler" }))
+
+        // Test \cite{nes autocomplete
+        let citeDoc = doc + "\n\\cite{nes"
+        if let citeQuery = LaTeXAutoCompleteEngine.extractQuery(in: citeDoc, cursorLocation: (citeDoc as NSString).length) {
+            #expect(citeQuery.enclosingCommand == "cite")
+            let suggestions = LaTeXAutoCompleteEngine.suggestions(for: citeQuery, in: citeDoc)
+            #expect(suggestions.first?.trigger == "nesterov1983")
+            #expect(suggestions.first?.category == "bib")
+        } else {
+            Issue.record("Expected cite query")
+        }
+
+        // Test \eqref{eq: autocomplete
+        let refDoc = doc + "\n\\eqref{eq:"
+        if let refQuery = LaTeXAutoCompleteEngine.extractQuery(in: refDoc, cursorLocation: (refDoc as NSString).length) {
+            #expect(refQuery.enclosingCommand == "ref")
+            let suggestions = LaTeXAutoCompleteEngine.suggestions(for: refQuery, in: refDoc)
+            #expect(suggestions.first?.trigger == "eq:euler")
+            #expect(suggestions.first?.category == "ref")
+        } else {
+            Issue.record("Expected ref query")
+        }
+    }
+
+    @Test func expl3LinterAndDocumentStatistics() {
+        let badExpl3 = #"""
+        \documentclass{article}
+        \ExplSyntaxOn
+        \tl_new:N \bad_var_name
+        \cs_new:Npn \my_module_func:nn #1 { #1 }
+        \ExplSyntaxOff
+        \begin{document}
+        Hello world from modern LaTeX3 document prose $x + y = z$.
+        \end{document}
+        """#
+
+        let warnings = Expl3Linter.lint(source: badExpl3)
+        #expect(warnings.count == 2)
+        #expect(warnings.contains(where: { $0.line == 3 && $0.message.contains("\\bad_var_name") }))
+        #expect(warnings.contains(where: { $0.line == 4 && $0.message.contains("declares 2 argument(s)") }))
+
+        let stats = Expl3Linter.computeStatistics(source: badExpl3)
+        #expect(stats.wordCount >= 7)
+        #expect(stats.mathCount == 1)
+        #expect(stats.expl3SymbolCount >= 2)
+    }
+
+    @Test func visualMatrixAndCSVToBooktabsGenerator() {
+        let matrix = VisualToolsGenerator.generateMatrix(env: "bmatrix", rows: 2, cols: 2, fillIdentity: true)
+        #expect(matrix.contains("\\begin{bmatrix}"))
+        #expect(matrix.contains("1 & 0 \\\\"))
+        #expect(matrix.contains("0 & 1"))
+
+        let csv = "Optimizer, Rate\nGD, Linear\nNAG, Accelerated"
+        let table = VisualToolsGenerator.convertCSVToBooktabs(csvText: csv, caption: "Results", label: "tab:res")
+        #expect(table.contains("\\toprule"))
+        #expect(table.contains("\\textbf{Optimizer} & \\textbf{Rate} \\\\"))
+        #expect(table.contains("GD & Linear \\\\"))
+        #expect(table.contains("\\bottomrule"))
+    }
 }
