@@ -764,6 +764,13 @@ def gradient_step(x: list[float], lr: float = 1e-2) -> list[float]:
         LaTeXPackagePreset(id: "amsthm", package: "amsthm", options: "", category: "Mathematics", description: "Theorem, lemma, definition, and proof environments."),
         LaTeXPackagePreset(id: "siunitx", package: "siunitx", options: "", category: "Mathematics", description: "LaTeX3-powered SI units and numerical column formatting (\\qty, \\num)."),
         LaTeXPackagePreset(id: "geometry", package: "geometry", options: "margin=1in", category: "Layout & Typography", description: "Flexible page layout and margin configuration."),
+        LaTeXPackagePreset(id: "fontspec", package: "fontspec", options: "", category: "Layout & Typography", description: "XeTeX/LuaTeX OpenType and TrueType font selection (\\setmainfont, \\setsansfont, \\setmonofont)."),
+        LaTeXPackagePreset(id: "libertinus", package: "libertinus", options: "", category: "Layout & Typography", description: "Libertinus serif, sans-serif, and math font family for XeTeX/LaTeX."),
+        LaTeXPackagePreset(id: "ebgaramond", package: "ebgaramond", options: "", category: "Layout & Typography", description: "Classic EB Garamond serif typography."),
+        LaTeXPackagePreset(id: "fira", package: "fira", options: "sfdefault", category: "Layout & Typography", description: "Mozilla Fira Sans and Fira Mono font suite."),
+        LaTeXPackagePreset(id: "plex", package: "plex", options: "", category: "Layout & Typography", description: "IBM Plex Serif, Sans, and Mono font family."),
+        LaTeXPackagePreset(id: "lmodern", package: "lmodern", options: "", category: "Layout & Typography", description: "Latin Modern scalable serif, sans, mono, and math fonts."),
+        LaTeXPackagePreset(id: "tgpagella", package: "tgpagella", options: "", category: "Layout & Typography", description: "TeX Gyre Pagella (Palatino-inspired) book serif typeface."),
         LaTeXPackagePreset(id: "microtype", package: "microtype", options: "", category: "Layout & Typography", description: "Subliminal micro-typographic refinements and character protrusion."),
         LaTeXPackagePreset(id: "booktabs", package: "booktabs", options: "", category: "Layout & Typography", description: "Publication-quality tables (\\toprule, \\midrule, \\bottomrule)."),
         LaTeXPackagePreset(id: "enumitem", package: "enumitem", options: "", category: "Layout & Typography", description: "Customizable list environments (itemize, enumerate, description)."),
@@ -778,5 +785,56 @@ def gradient_step(x: list[float], lr: float = 1e-2) -> list[float]:
         LaTeXPackagePreset(id: "pyluatex", package: "pyluatex", options: "", category: "Python & Code", description: "Embed and evaluate Python sessions directly inside LaTeX documents."),
         LaTeXPackagePreset(id: "listings", package: "listings", options: "", category: "Python & Code", description: "Pure-TeX source code printer supporting language=Python without external shell-escape."),
         LaTeXPackagePreset(id: "algorithm2e", package: "algorithm2e", options: "ruled,vlined,linesnumbered", category: "Python & Code", description: "Publication-grade algorithmic pseudocode blocks (\\KwIn, \\KwOut, \\For, \\While).")
+    ]
+
+    public static let ctanFontPresets: [CTANFontPreset] = [
+        CTANFontPreset(
+            id: "libertinus",
+            name: "Libertinus (Serif + Math)",
+            packageName: "libertinus",
+            options: "",
+            classification: "Math + Serif",
+            description: "Modern Linux Libertine fork with matched OpenType math and sans-serif fonts."
+        ),
+        CTANFontPreset(
+            id: "ebgaramond",
+            name: "EB Garamond",
+            packageName: "ebgaramond",
+            options: "",
+            classification: "Serif",
+            description: "Classical 16th-century Garamond revival designed for long-form books and articles."
+        ),
+        CTANFontPreset(
+            id: "fira",
+            name: "Fira Sans & Mono",
+            packageName: "fira",
+            options: "sfdefault",
+            classification: "Sans-Serif",
+            description: "Clean geometric humanist sans-serif and code monospace font family."
+        ),
+        CTANFontPreset(
+            id: "plex",
+            name: "IBM Plex",
+            packageName: "plex",
+            options: "",
+            classification: "Sans-Serif",
+            description: "Coordinated IBM Plex Serif, Sans, and Mono families for technical documentation."
+        ),
+        CTANFontPreset(
+            id: "lmodern",
+            name: "Latin Modern",
+            packageName: "lmodern",
+            options: "",
+            classification: "Math + Serif",
+            description: "High-resolution scalable successor to Computer Modern with full math support."
+        ),
+        CTANFontPreset(
+            id: "tgpagella",
+            name: "TeX Gyre Pagella",
+            packageName: "tgpagella",
+            options: "",
+            classification: "Serif",
+            description: "Palatino-inspired academic book serif with crisp small caps and old-style figures."
+        )
     ]
 }

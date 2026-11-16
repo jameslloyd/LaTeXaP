@@ -50,8 +50,15 @@
      - *LaTeX3 Key-Value Interface (`l3keys`)* (`\keys_define:nn`)
      - *TikZ & PGF Vector Diagrams*
 
-5. **PDF Export**
+5. **Custom Fonts & Editor Typography (`v0.1.2`)**
+   - **Font Manager (`⇧⌘F`) & Fonts Sidebar Tab**: Import local `.ttf`, `.otf`, and `.ttc` font files (via **View → Add Custom Font...**, **Add Font...**, or drag-and-drop), preview live customizable specimens (`10–36 pt`, Light/Dark surface), rename, and safely remove managed fonts with reference-aware confirmation.
+   - **XeTeX (`fontspec`) & CTAN Font Presets**: Apply custom fonts or macOS system fonts directly to your document's **Main** (`\setmainfont`), **Sans** (`\setsansfont`), **Mono** (`\setmonofont`), or named **`\newfontfamily`** preamble roles, or insert one-click CTAN font packages (`libertinus`, `ebgaramond`, `fira`, `plex`, `lmodern`, `tgpagella`). Managed fonts are stored non-invasively in `~/Library/Application Support/LaTeXaP/Fonts/` and automatically exposed to Tectonic.
+   - **Code Editor Font Picker**: Choose System Monospaced, any macOS monospaced font, or an imported custom font (`10–24 pt`) from the editor header popover or Font Manager, persisted across launches.
+
+6. **PDF Export**
    - Export compiled PDF documents directly via the toolbar (**Export PDF** / `⇧⌘E`).
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes and [docs/custom-fonts-architecture.md](docs/custom-fonts-architecture.md) / [docs/custom-fonts-ux.md](docs/custom-fonts-ux.md) for technical and UX design details.
 
 ---
 

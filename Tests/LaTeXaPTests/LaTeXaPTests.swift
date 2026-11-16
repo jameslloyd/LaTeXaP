@@ -252,4 +252,389 @@ struct LaTeXaPTests {
         let noUpdate = UpdateCheckerService.parseReleaseJSON(data: sampleReleaseJSON, currentVersion: "0.2.0")
         #expect(noUpdate == nil)
     }
+
+    // MARK: - Custom Fonts Tests
+
+    private func sampleSystemFontURL() -> URL? {
+        let candidates = [
+            "/System/Library/Fonts/Geneva.ttf",
+            "/System/Library/Fonts/Supplemental/Courier New.ttf",
+            "/System/Library/Fonts/Courier.ttc",
+            "/System/Library/Fonts/Helvetica.ttc"
+        ]
+        for path in candidates where FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
+    }
+
+    @Test func fontModelsAndCTANPresets() {
+        #expect(FontFileFormat.from(url: URL(fileURLWithPath: "/tmp/MyFont.ttf")) == .ttf)
+        #expect(FontFileFormat.from(url: URL(fileURLWithPath: "/tmp/MyFont.OTF")) == .otf)
+        #expect(FontFileFormat.from(url: URL(fileURLWithPath: "/tmp/MyFont.ttc")) == .ttc)
+        #expect(FontFileFormat.from(url: URL(fileURLWithPath: "/tmp/MyFont.woff2")) == nil)
+        #expect(FontFileFormat.from(url: URL(fileURLWithPath: "/tmp/MyFont.svg")) == nil)
+
+        #expect(LaTeXFontRole.main.latexCommand == "\\setmainfont")
+        #expect(LaTeXFontRole.sans.latexCommand == "\\setsansfont")
+        #expect(LaTeXFontRole.mono.latexCommand == "\\setmonofont")
+        #expect(LaTeXFontRole.customFamily.latexCommand == "\\newfontfamily")
+
+        let presetWithOpts = CTANFontPreset(
+            id: "fira",
+            name: "Fira",
+            packageName: "fira",
+            options: "sfdefault",
+            classification: "Sans-Serif",
+            description: "Fira"
+        )
+        #expect(presetWithOpts.usepackageStatement == "\\usepackage[sfdefault]{fira}")
+
+        let pkgNames = Set(LaTeXCatalog.commonPackages.map(\.package))
+        for expected in ["fontspec", "libertinus", "ebgaramond", "fira", "plex", "lmodern", "tgpagella"] {
+            #expect(pkgNames.contains(expected), "Expected \(expected) in LaTeXCatalog.commonPackages")
+        }
+        #expect(LaTeXCatalog.ctanFontPresets.count >= 6)
+    }
+
+    @Test func fontLibraryValidationSanitizationAndManifestCRUD() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPFontTests-\(UUID().uuidString)", isDirectory: true)
+        let storageDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+        let stagingDir = tempRoot.appendingPathComponent("Staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let service = FontLibraryService(storageDirectory: storageDir)
+
+        // 1. Missing file
+        #expect(throws: FontImportError.self) {
+            _ = try service.importFont(from: stagingDir.appendingPathComponent("Missing.ttf"))
+        }
+
+        // 2. Unsupported extension (.woff2)
+        let woffURL = stagingDir.appendingPathComponent("WebFont.woff2")
+        try Data([0x77, 0x4F, 0x46, 0x32]).write(to: woffURL)
+        do {
+            _ = try service.importFont(from: woffURL)
+            Issue.record("Expected unsupportedFormat error")
+        } catch let error as FontImportError {
+            if case .unsupportedFormat(let ext) = error {
+                #expect(ext == ".woff2")
+            } else {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+
+        // 3. Corrupt font bytes with .ttf extension
+        let corruptURL = stagingDir.appendingPathComponent("Corrupt.ttf")
+        try Data("not a real font file".utf8).write(to: corruptURL)
+        do {
+            _ = try service.importFont(from: corruptURL)
+            Issue.record("Expected invalidOrCorruptFont error")
+        } catch let error as FontImportError {
+            if case .invalidOrCorruptFont = error {
+                // expected
+            } else {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+
+        // 4. Valid font import with unsafe filename characters (path traversal / TeX chars)
+        guard let systemFont = sampleSystemFontURL() else {
+            Issue.record("No sample macOS system font found for testing")
+            return
+        }
+        let unsafeSubdir = stagingDir.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: unsafeSubdir, withIntermediateDirectories: true)
+        let unsafeFontURL = unsafeSubdir.appendingPathComponent("..evil {font}%$#.\(systemFont.pathExtension)")
+        try Data(contentsOf: systemFont).write(to: unsafeFontURL)
+
+        let record = try service.importFont(from: unsafeFontURL)
+        #expect(!record.fileName.contains("/"))
+        #expect(!record.fileName.contains(".."))
+        #expect(!record.fileName.contains("{"))
+        #expect(!record.fileName.contains("}"))
+        #expect(!record.fileName.contains("%"))
+        #expect(service.fontFileURL(for: record).deletingLastPathComponent().standardizedFileURL == service.fontsDirectory)
+        #expect(FileManager.default.fileExists(atPath: service.fontFileURL(for: record).path))
+        #expect(FileManager.default.fileExists(atPath: service.manifestURL.path))
+
+        // 5. Duplicate detection
+        do {
+            _ = try service.importFont(from: unsafeFontURL)
+            Issue.record("Expected duplicateFont error")
+        } catch let error as FontImportError {
+            if case .duplicateFont = error {
+                // expected
+            } else {
+                Issue.record("Unexpected error: \(error)")
+            }
+        }
+
+        // 6. Manifest reload & rename
+        let loaded = try service.loadManifest()
+        #expect(loaded.count == 1)
+        #expect(loaded.first?.id == record.id)
+
+        let renamed = try service.renameFont(id: record.id, newDisplayName: "Custom Studio Font")
+        #expect(renamed.displayName == "Custom Studio Font")
+        #expect(try service.loadManifest().first?.displayName == "Custom Studio Font")
+
+        #expect(throws: FontImportError.self) {
+            _ = try service.renameFont(id: record.id, newDisplayName: "   ")
+        }
+
+        // 7. Register all & delete
+        let registered = service.registerAllStoredFonts()
+        #expect(registered.count == 1)
+
+        try service.deleteFont(id: record.id)
+        #expect(try service.loadManifest().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: service.fontFileURL(for: record).path))
+
+        // 8. System font discovery
+        let allFamilies = service.systemFontFamilies(monospaceOnly: false)
+        let monoFamilies = service.systemFontFamilies(monospaceOnly: true)
+        #expect(!allFamilies.isEmpty)
+        #expect(!monoFamilies.isEmpty)
+        #expect(monoFamilies.count <= allFamilies.count)
+    }
+
+    @Test @MainActor func documentViewModelFontActionsAndUserDefaultsPersistence() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPVMFontTests-\(UUID().uuidString)", isDirectory: true)
+        let storageDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+        let stagingDir = tempRoot.appendingPathComponent("Staging", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        let suiteName = "LaTeXaPTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let service = FontLibraryService(storageDirectory: storageDir)
+        let vm = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: service,
+            userDefaults: defaults,
+            compileOnInit: false
+        )
+        vm.autoCompileEnabled = false
+
+        // Editor font & size persistence + clamping
+        vm.selectEditorFont("Menlo")
+        vm.editorFontSize = 30.0
+        #expect(vm.editorFontSize == 24.0)
+        vm.editorFontSize = 6.0
+        #expect(vm.editorFontSize == 10.0)
+        vm.editorFontSize = 16.5
+
+        let vmReloaded = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: service,
+            userDefaults: defaults,
+            compileOnInit: false
+        )
+        #expect(vmReloaded.editorFontName == "Menlo")
+        #expect(vmReloaded.editorFontSize == 16.5)
+
+        vmReloaded.resetEditorFontToDefault()
+        #expect(vmReloaded.editorFontName == "")
+        #expect(vmReloaded.editorFontSize == 13.5)
+
+        // Custom font import, preamble injection, replacement, rename, delete
+        guard let systemFont = sampleSystemFontURL() else {
+            Issue.record("No sample macOS system font found for testing")
+            return
+        }
+        let stagedFont = stagingDir.appendingPathComponent("TestDisplayFont.\(systemFont.pathExtension)")
+        try Data(contentsOf: systemFont).write(to: stagedFont)
+
+        await vm.importCustomFontsAsync(urls: [stagedFont])
+        #expect(vm.customFonts.count == 1)
+        #expect(!vm.isImportingFont)
+        #expect(vm.fontErrorMessage == nil)
+        #expect(vm.fontSuccessMessage != nil)
+
+        if let imported = vm.customFonts.first {
+            vm.renameCustomFont(imported, to: "Studio Sans")
+            #expect(vm.customFonts.first?.displayName == "Studio Sans")
+
+            vm.applyCustomFontToDocument(vm.customFonts[0], role: .main)
+            #expect(vm.sourceText.contains("\\usepackage{fontspec}"))
+            #expect(vm.sourceText.contains("\\setmainfont{\(imported.fileName)}"))
+
+            // Applying another main font replaces existing \setmainfont rather than duplicating
+            vm.applySystemFontToDocument(familyName: "Georgia", role: .main)
+            #expect(vm.sourceText.contains("\\setmainfont{Georgia}"))
+            #expect(!vm.sourceText.contains("\\setmainfont{\(imported.fileName)}"))
+
+            // Custom family command sanitization
+            vm.applyCustomFontToDocument(vm.customFonts[0], role: .customFamily, customCommand: "\\my_font-1!")
+            #expect(vm.sourceText.contains("\\newfontfamily\\myfont{\(imported.fileName)}"))
+
+            // Deleting font currently selected in editor resets editorFontName
+            vm.selectEditorFont(imported.postScriptName)
+            vm.deleteCustomFont(vm.customFonts[0])
+            #expect(vm.customFonts.isEmpty)
+            #expect(vm.editorFontName == "")
+        }
+
+        // CTAN preset
+        if let preset = LaTeXCatalog.ctanFontPresets.first {
+            vm.applyCTANFontPreset(preset)
+            #expect(vm.sourceText.contains(preset.usepackageStatement))
+        }
+
+        vm.clearFontFeedback()
+        #expect(vm.fontErrorMessage == nil)
+        #expect(vm.fontSuccessMessage == nil)
+    }
+
+    @Test func tectonicFontEnvironmentAndAutoCompleteAndContextSuggestions() throws {
+        // 1. Tectonic env injection (drops TEXINPUTS, avoids //, rejects ':' in path)
+        var env: [String: String] = ["OPENTYPEFONTS": "/existing/fonts"]
+        let fontDir = URL(fileURLWithPath: "/tmp/LaTeXaPFontsTest")
+        let colonDir = URL(fileURLWithPath: "/tmp/Bad:ColonDir")
+        TectonicService.injectFontEnvironment(fontDirectories: [fontDir, colonDir], into: &env)
+        #expect(env["OPENTYPEFONTS"] == "/tmp/LaTeXaPFontsTest:/existing/fonts")
+        #expect(env["TTFONTS"] == "/tmp/LaTeXaPFontsTest:")
+        #expect(env["OSFONTDIR"] == "/tmp/LaTeXaPFontsTest:")
+        #expect(env["TEXINPUTS"] == nil)
+
+        // 2. Autocomplete for fontspec commands and brace font arguments
+        let customRecord = CustomFontRecord(
+            displayName: "Fira Code",
+            familyName: "Fira Code",
+            postScriptName: "FiraCode-Regular",
+            styleName: "Regular",
+            fileName: "FiraCode-Regular.ttf",
+            format: .ttf,
+            isMonospace: true,
+            fileSizeBytes: 12345
+        )
+
+        let cmdDoc = "\\setma"
+        let cmdQuery = LaTeXAutoCompleteEngine.extractQuery(in: cmdDoc, cursorLocation: (cmdDoc as NSString).length)
+        #expect(cmdQuery != nil)
+        if let cmdQuery {
+            let cmdSuggestions = LaTeXAutoCompleteEngine.suggestions(for: cmdQuery, in: cmdDoc)
+            #expect(cmdSuggestions.contains(where: { $0.trigger == "\\setmainfont" }))
+        }
+
+        let fontArgDoc = "\\setmainfont{Fira"
+        let fontQuery = LaTeXAutoCompleteEngine.extractQuery(in: fontArgDoc, cursorLocation: (fontArgDoc as NSString).length)
+        #expect(fontQuery?.enclosingCommand == "font")
+        #expect(fontQuery?.prefix == "Fira")
+        if let fontQuery {
+            let fontSuggestions = LaTeXAutoCompleteEngine.suggestions(
+                for: fontQuery,
+                in: fontArgDoc,
+                customFonts: [customRecord]
+            )
+            #expect(fontSuggestions.first?.trigger == "FiraCode-Regular.ttf")
+            #expect(fontSuggestions.first?.category == "font")
+        }
+
+        let newFamilyDoc = "\\newfontfamily{\\heading}{Fira"
+        let newFamilyQuery = LaTeXAutoCompleteEngine.extractQuery(in: newFamilyDoc, cursorLocation: (newFamilyDoc as NSString).length)
+        #expect(newFamilyQuery?.enclosingCommand == "font")
+        #expect(newFamilyQuery?.prefix == "Fira")
+
+        // 3. ContextSuggestionsEngine detects fontspec font-not-found diagnostics
+        let docMissingFontspec = """
+        \\documentclass{article}
+        \\begin{document}
+        Hello
+        \\end{document}
+        """
+        let fontDiag = LaTeXDiagnostic(
+            line: 2,
+            severity: .error,
+            message: "Package fontspec Error: The font \"NonExistent\" cannot be found."
+        )
+        let advice = ContextSuggestionsEngine.analyze(source: docMissingFontspec, cursorLine: 2, diagnostics: [fontDiag])
+        #expect(advice.items.contains(where: { $0.category == "Fonts" && $0.packageToInsert == "fontspec" }))
+    }
+
+    @Test func fontSecurityHardeningRegressionTests() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPFontSecTests-\(UUID().uuidString)", isDirectory: true)
+        let storageDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+        try FileManager.default.createDirectory(at: storageDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let service = FontLibraryService(storageDirectory: storageDir)
+
+        // 1. Reject non-file URLs
+        let remoteURL = URL(string: "https://example.com/EvilFont.ttf")!
+        #expect(throws: FontImportError.self) {
+            _ = try service.importFont(from: remoteURL)
+        }
+
+        // 2. Reject symlinks as import source
+        if let systemFont = sampleSystemFontURL() {
+            let linkURL = tempRoot.appendingPathComponent("SymlinkFont.\(systemFont.pathExtension)")
+            try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: systemFont)
+            #expect(throws: FontImportError.self) {
+                _ = try service.importFont(from: linkURL)
+            }
+        }
+
+        // 3. TeX metacharacter sanitization & empty-target guard
+        let sanitized = FontLibraryService.sanitizeTeXArgument("MyFont{}\\input%$#&~^_[]\t\n")
+        #expect(sanitized == "MyFontinput")
+        #expect(service.generateSystemFontspecBlock(familyName: "{}\\#$%", role: .main) == "")
+
+        // 4. Autocomplete sanitizes malicious font.fileName
+        let maliciousRecord = CustomFontRecord(
+            displayName: "Bad",
+            familyName: "Bad",
+            postScriptName: "Bad",
+            styleName: "Regular",
+            fileName: "Bad}\\write18{id}.ttf",
+            format: .ttf,
+            isMonospace: false,
+            fileSizeBytes: 100
+        )
+        let q = LaTeXAutoCompleteEngine.extractQuery(in: "\\setmainfont{Bad", cursorLocation: 16)!
+        let items = LaTeXAutoCompleteEngine.suggestions(for: q, in: "\\setmainfont{Bad", customFonts: [maliciousRecord])
+        #expect(items.first?.trigger == "Badwrite18id.ttf")
+
+        // 5. Tampered manifest entries (e.g. fileName == "fonts.json" or "../escape.ttf") are filtered out
+        let tamperedManifest = FontLibraryManifest(
+            schemaVersion: 1,
+            fonts: [
+                CustomFontRecord(
+                    id: UUID(),
+                    displayName: "Tampered",
+                    familyName: "Tampered",
+                    postScriptName: "Tampered",
+                    styleName: "Regular",
+                    fileName: "fonts.json",
+                    format: .ttf,
+                    isMonospace: false,
+                    fileSizeBytes: 10
+                ),
+                CustomFontRecord(
+                    id: UUID(),
+                    displayName: "Traversal",
+                    familyName: "Traversal",
+                    postScriptName: "Traversal",
+                    styleName: "Regular",
+                    fileName: "../outside.ttf",
+                    format: .ttf,
+                    isMonospace: false,
+                    fileSizeBytes: 10
+                )
+            ]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(tamperedManifest).write(to: service.manifestURL)
+        #expect(try service.loadManifest().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: service.manifestURL.path))
+    }
 }

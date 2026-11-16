@@ -35,13 +35,38 @@ public final class LaTeXSyntaxHighlighter {
         )
     }
 
-    public func highlight(textStorage: NSTextStorage, fontSize: CGFloat = 13.5, lightBackground: Bool = true) {
+    public static func resolveFont(name: String, size: CGFloat, weight: NSFont.Weight = .regular) -> NSFont {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            if let font = NSFont(name: trimmed, size: size) {
+                if weight == .semibold || weight == .bold {
+                    return NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+                }
+                return font
+            }
+            let descriptor = NSFontDescriptor(fontAttributes: [.family: trimmed])
+            if let familyFont = NSFont(descriptor: descriptor, size: size) {
+                if weight == .semibold || weight == .bold {
+                    return NSFontManager.shared.convert(familyFont, toHaveTrait: .boldFontMask)
+                }
+                return familyFont
+            }
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    public func highlight(
+        textStorage: NSTextStorage,
+        fontSize: CGFloat = 13.5,
+        fontName: String = "",
+        lightBackground: Bool = true
+    ) {
         let string = textStorage.string
         let fullRange = NSRange(location: 0, length: (string as NSString).length)
         guard fullRange.length > 0 else { return }
 
-        let baseFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        let boldFont = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .semibold)
+        let baseFont = Self.resolveFont(name: fontName, size: fontSize, weight: .regular)
+        let boldFont = Self.resolveFont(name: fontName, size: fontSize, weight: .semibold)
 
         // High-contrast explicit sRGB palette for effortless reading
         let baseTextColor = lightBackground
@@ -514,6 +539,21 @@ public final class AutoCompletePopupController: NSObject, NSTableViewDataSource,
 
 public final class LaTeXEditorTextView: NSTextView {
     public var onDropImageFile: ((URL) -> Void)?
+    public var onDropFontFiles: (([URL]) -> Void)?
+    public var editorFontSize: CGFloat = 13.5 {
+        didSet {
+            if oldValue != editorFontSize {
+                needsDisplay = true
+            }
+        }
+    }
+    public var editorFontName: String = "" {
+        didSet {
+            if oldValue != editorFontName {
+                needsDisplay = true
+            }
+        }
+    }
     public var lightBackground: Bool = true {
         didSet {
             if oldValue != lightBackground {
@@ -532,12 +572,23 @@ public final class LaTeXEditorTextView: NSTextView {
 
     public override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let pboard = sender.draggingPasteboard
-        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
-           let first = urls.first {
-            let ext = first.pathExtension.lowercased()
-            if ["png", "jpg", "jpeg", "pdf", "tiff"].contains(ext) {
-                onDropImageFile?(first)
+        let readOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: readOptions) as? [URL],
+           !urls.isEmpty {
+            let fileURLs = urls.filter { $0.isFileURL }
+            let fontURLs = fileURLs.filter { ["ttf", "otf", "ttc"].contains($0.pathExtension.lowercased()) }
+            if !fontURLs.isEmpty {
+                onDropFontFiles?(fontURLs)
                 return true
+            }
+            if let first = fileURLs.first {
+                let ext = first.pathExtension.lowercased()
+                if ["png", "jpg", "jpeg", "pdf", "tiff"].contains(ext) {
+                    onDropImageFile?(first)
+                    return true
+                }
             }
         }
         return super.performDragOperation(sender)
@@ -595,6 +646,7 @@ public final class LaTeXEditorTextView: NSTextView {
             }
         }
 
+        let editorFont = LaTeXSyntaxHighlighter.resolveFont(name: editorFontName, size: editorFontSize, weight: .regular)
         let glyphIndex = layoutManager.glyphIndexForCharacter(at: max(0, sel.location - 1))
         let charPoint: NSPoint
         if sel.location == 0 {
@@ -603,8 +655,7 @@ public final class LaTeXEditorTextView: NSTextView {
             let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
             let loc = layoutManager.location(forGlyphAt: glyphIndex)
             let prevChar = nsString.substring(with: NSRange(location: sel.location - 1, length: 1)) as NSString
-            let font = NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular)
-            let advance = prevChar.size(withAttributes: [.font: font]).width
+            let advance = prevChar.size(withAttributes: [.font: editorFont]).width
             charPoint = NSPoint(
                 x: textContainerInset.width + lineRect.origin.x + loc.x + advance,
                 y: textContainerInset.height + lineRect.origin.y
@@ -617,7 +668,7 @@ public final class LaTeXEditorTextView: NSTextView {
             ? NSColor(srgbRed: 0.52, green: 0.58, blue: 0.68, alpha: 1.0)
             : NSColor(srgbRed: 0.45, green: 0.52, blue: 0.62, alpha: 1.0)
         let ghostAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 13.5, weight: .regular),
+            .font: editorFont,
             .foregroundColor: ghostColor
         ]
         (firstLineGhost as NSString).draw(at: charPoint, withAttributes: ghostAttrs)
@@ -630,8 +681,11 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
     @Binding public var jumpToLineRequest: Int?
     public var diagnostics: [LaTeXDiagnostic]
     public var fontSize: CGFloat
+    public var fontName: String
+    public var customFonts: [CustomFontRecord]
     public var lightBackground: Bool
     public var onDropImageFile: ((URL) -> Void)?
+    public var onDropFontFiles: (([URL]) -> Void)?
 
     public init(
         text: Binding<String>,
@@ -639,16 +693,22 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         jumpToLineRequest: Binding<Int?>,
         diagnostics: [LaTeXDiagnostic],
         fontSize: CGFloat = 13.5,
+        fontName: String = "",
+        customFonts: [CustomFontRecord] = [],
         lightBackground: Bool = true,
-        onDropImageFile: ((URL) -> Void)? = nil
+        onDropImageFile: ((URL) -> Void)? = nil,
+        onDropFontFiles: (([URL]) -> Void)? = nil
     ) {
         self._text = text
         self._cursorLine = cursorLine
         self._jumpToLineRequest = jumpToLineRequest
         self.diagnostics = diagnostics
         self.fontSize = fontSize
+        self.fontName = fontName
+        self.customFonts = customFonts
         self.lightBackground = lightBackground
         self.onDropImageFile = onDropImageFile
+        self.onDropFontFiles = onDropFontFiles
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -709,6 +769,9 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 8, height: 10)
         textView.delegate = context.coordinator
         textView.onDropImageFile = onDropImageFile
+        textView.onDropFontFiles = onDropFontFiles
+        textView.editorFontSize = fontSize
+        textView.editorFontName = fontName
 
         scrollView.documentView = textView
 
@@ -720,12 +783,18 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.gutterView = gutter
         context.coordinator.lastFontSize = fontSize
+        context.coordinator.lastFontName = fontName
         context.coordinator.lastLightBackground = lightBackground
 
         applyTheme(to: scrollView, textView: textView, gutter: gutter)
 
         textView.string = text
-        LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: fontSize, lightBackground: lightBackground)
+        LaTeXSyntaxHighlighter.shared.highlight(
+            textStorage: textStorage,
+            fontSize: fontSize,
+            fontName: fontName,
+            lightBackground: lightBackground
+        )
         context.coordinator.updateDiagnostics(diagnostics)
 
         // Observe scroll notifications to redraw line numbers and hide popup on scroll
@@ -746,12 +815,19 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
               let textStorage = textView.textStorage
         else { return }
 
+        textView.onDropImageFile = onDropImageFile
+        textView.onDropFontFiles = onDropFontFiles
+
         let themeOrFontChanged = (context.coordinator.lastLightBackground != lightBackground) ||
-                                 (context.coordinator.lastFontSize != fontSize)
+                                 (context.coordinator.lastFontSize != fontSize) ||
+                                 (context.coordinator.lastFontName != fontName)
 
         if themeOrFontChanged {
             context.coordinator.lastLightBackground = lightBackground
             context.coordinator.lastFontSize = fontSize
+            context.coordinator.lastFontName = fontName
+            textView.editorFontSize = fontSize
+            textView.editorFontName = fontName
             applyTheme(to: scrollView, textView: textView, gutter: context.coordinator.gutterView)
         }
 
@@ -760,7 +836,12 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
             if textView.string != text {
                 textView.string = text
             }
-            LaTeXSyntaxHighlighter.shared.highlight(textStorage: textStorage, fontSize: fontSize, lightBackground: lightBackground)
+            LaTeXSyntaxHighlighter.shared.highlight(
+                textStorage: textStorage,
+                fontSize: fontSize,
+                fontName: fontName,
+                lightBackground: lightBackground
+            )
             textView.selectedRanges = selectedRanges
             textView.needsDisplay = true
             context.coordinator.gutterView?.needsDisplay = true
@@ -783,6 +864,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         weak var gutterView: LineNumberGutterView?
         var isEditingText = false
         var lastFontSize: CGFloat = 13.5
+        var lastFontName: String = ""
         var lastLightBackground: Bool = true
 
         let popupController = AutoCompletePopupController()
@@ -813,6 +895,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
             LaTeXSyntaxHighlighter.shared.highlight(
                 textStorage: textStorage,
                 fontSize: parent.fontSize,
+                fontName: parent.fontName,
                 lightBackground: parent.lightBackground
             )
             updateCursorLine()
@@ -885,7 +968,11 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
                 return
             }
 
-            let suggestions = LaTeXAutoCompleteEngine.suggestions(for: query, in: source)
+            let suggestions = LaTeXAutoCompleteEngine.suggestions(
+                for: query,
+                in: source,
+                customFonts: parent.customFonts
+            )
             guard !suggestions.isEmpty else {
                 dismissAutoComplete()
                 return
@@ -966,6 +1053,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
                 LaTeXSyntaxHighlighter.shared.highlight(
                     textStorage: textStorage,
                     fontSize: parent.fontSize,
+                    fontName: parent.fontName,
                     lightBackground: parent.lightBackground
                 )
                 updateCursorLine()

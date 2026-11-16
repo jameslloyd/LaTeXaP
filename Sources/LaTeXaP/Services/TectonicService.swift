@@ -52,7 +52,11 @@ public actor TectonicService {
         currentProcess = nil
     }
 
-    public func compile(source: String, documentDirectory: URL? = nil) async -> CompilationResult {
+    public func compile(
+        source: String,
+        documentDirectory: URL? = nil,
+        fontDirectories: [URL] = []
+    ) async -> CompilationResult {
         cancelRunningCompilation()
         let startTime = DispatchTime.now()
 
@@ -74,6 +78,8 @@ public actor TectonicService {
 
         let buildDir = workspaceDir
         try? FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
+
+        stageFontFiles(from: fontDirectories, into: buildDir)
 
         let texFileURL = buildDir.appendingPathComponent("document.tex")
         let pdfFileURL = buildDir.appendingPathComponent("document.pdf")
@@ -115,6 +121,7 @@ public actor TectonicService {
         var env = ProcessInfo.processInfo.environment
         let extraPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "")"
+        Self.injectFontEnvironment(fontDirectories: fontDirectories, into: &env)
         process.environment = env
 
         let stdoutPipe = Pipe()
@@ -162,6 +169,72 @@ public actor TectonicService {
             logOutput: combinedConsole,
             durationMs: durationMs
         )
+    }
+
+    private func stageFontFiles(from fontDirectories: [URL], into buildDir: URL) {
+        let allowedExtensions: Set<String> = ["ttf", "otf", "ttc"]
+        let fm = FileManager.default
+
+        // Clean up previous font symlinks so deleted fonts do not remain staged
+        if let existingItems = try? fm.contentsOfDirectory(
+            at: buildDir,
+            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            options: []
+        ) {
+            for item in existingItems {
+                let ext = item.pathExtension.lowercased()
+                guard allowedExtensions.contains(ext) else { continue }
+                let values = try? item.resourceValues(forKeys: [.isSymbolicLinkKey])
+                if values?.isSymbolicLink == true {
+                    try? fm.removeItem(at: item)
+                }
+            }
+        }
+
+        // Create fresh symlinks for each regular, non-symlink font binary in the provided directories
+        for dir in fontDirectories where dir.isFileURL {
+            guard let files = try? fm.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for fontFile in files {
+                let ext = fontFile.pathExtension.lowercased()
+                guard allowedExtensions.contains(ext) else { continue }
+                let values = try? fontFile.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
+                let destLink = buildDir.appendingPathComponent(fontFile.lastPathComponent)
+                if !fm.fileExists(atPath: destLink.path) {
+                    try? fm.createSymbolicLink(at: destLink, withDestinationURL: fontFile)
+                }
+            }
+        }
+    }
+
+    public static func injectFontEnvironment(fontDirectories: [URL], into env: inout [String: String]) {
+        let searchEntries = fontDirectories.compactMap { dir -> String? in
+            guard dir.isFileURL else { return nil }
+            let path = dir.standardizedFileURL.path
+            guard !path.isEmpty,
+                  !path.contains(":"),
+                  !path.contains("\r"),
+                  !path.contains("\n"),
+                  !path.contains("\0") else {
+                return nil
+            }
+            return path
+        }
+        guard !searchEntries.isEmpty else { return }
+        let prefix = searchEntries.joined(separator: ":")
+        for key in ["OPENTYPEFONTS", "TTFONTS", "OSFONTDIR"] {
+            if let existing = env[key], !existing.isEmpty {
+                env[key] = "\(prefix):\(existing)"
+            } else {
+                env[key] = "\(prefix):"
+            }
+        }
     }
 
     public static func parseDiagnostics(stderr: String, stdout: String, logFile: String) -> [LaTeXDiagnostic] {

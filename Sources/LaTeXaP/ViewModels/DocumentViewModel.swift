@@ -38,11 +38,33 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var autoCompileEnabled: Bool = true
     @Published public var showConsoleDrawer: Bool = true
     @Published public var showSidebar: Bool = true
-    @Published public var editorFontSize: CGFloat = 13.5
+    @Published public var editorFontSize: CGFloat = 13.5 {
+        didSet {
+            let clamped = min(max(editorFontSize, 10.0), 24.0)
+            if clamped != editorFontSize {
+                editorFontSize = clamped
+                return
+            }
+            userDefaults.set(Double(clamped), forKey: Self.editorFontSizeDefaultsKey)
+        }
+    }
     @Published public var useLightEditorBackground: Bool = true
     @Published public var selectedSidebarTab: String = "Outline"
     @Published public var packageSearchText: String = ""
     @Published public var selectedDiagnosticTab: Int = 2
+
+    // Custom & Editor Font State
+    @Published public var customFonts: [CustomFontRecord] = []
+    @Published public var fontSearchText: String = ""
+    @Published public var isImportingFont: Bool = false
+    @Published public var fontErrorMessage: String?
+    @Published public var fontSuccessMessage: String?
+    @Published public var showFontManagerSheet: Bool = false
+    @Published public var editorFontName: String = "" {
+        didSet {
+            userDefaults.set(editorFontName, forKey: Self.editorFontNameDefaultsKey)
+        }
+    }
 
     // BibTeX DOI / arXiv lookup state
     @Published public var bibLookupQuery: String = ""
@@ -63,17 +85,37 @@ public final class DocumentViewModel: ObservableObject {
     // Non-intrusive GitHub release update notification state
     @Published public var availableUpdate: AppReleaseUpdate?
 
+    private static let editorFontNameDefaultsKey = "LaTeXaP.editorFontName"
+    private static let editorFontSizeDefaultsKey = "LaTeXaP.editorFontSize"
+
     private let tectonicService = TectonicService()
+    private let fontLibraryService: FontLibraryService
+    private let userDefaults: UserDefaults
     private var debounceTask: Task<Void, Never>?
     private var lastCompilerDiagnostics: [LaTeXDiagnostic] = []
 
-    public init(initialTemplate: LaTeXTemplate = LaTeXCatalog.defaultTemplate) {
+    public init(
+        initialTemplate: LaTeXTemplate = LaTeXCatalog.defaultTemplate,
+        fontLibraryService: FontLibraryService = FontLibraryService(),
+        userDefaults: UserDefaults = .standard,
+        compileOnInit: Bool = true
+    ) {
+        self.fontLibraryService = fontLibraryService
+        self.userDefaults = userDefaults
         self.sourceText = initialTemplate.content
-        refreshDerivedMetadata()
-        Task {
-            await compileNow()
+        self.editorFontName = userDefaults.string(forKey: Self.editorFontNameDefaultsKey) ?? ""
+        if userDefaults.object(forKey: Self.editorFontSizeDefaultsKey) != nil {
+            let storedSize = userDefaults.double(forKey: Self.editorFontSizeDefaultsKey)
+            self.editorFontSize = CGFloat(min(max(storedSize, 10.0), 24.0))
         }
-        checkForUpdatesSilently()
+        self.customFonts = fontLibraryService.registerAllStoredFonts()
+        refreshDerivedMetadata()
+        if compileOnInit {
+            Task {
+                await compileNow()
+            }
+            checkForUpdatesSilently()
+        }
     }
 
     public func checkForUpdatesSilently() {
@@ -109,7 +151,11 @@ public final class DocumentViewModel: ObservableObject {
         let codeSnapshot = sourceText
         let docDir = currentFileURL?.deletingLastPathComponent()
 
-        let result = await tectonicService.compile(source: codeSnapshot, documentDirectory: docDir)
+        let result = await tectonicService.compile(
+            source: codeSnapshot,
+            documentDirectory: docDir,
+            fontDirectories: [fontLibraryService.fontsDirectory]
+        )
 
         lastCompilerDiagnostics = result.diagnostics
         diagnostics = lastCompilerDiagnostics + staticLintWarnings
@@ -320,5 +366,276 @@ public final class DocumentViewModel: ObservableObject {
                 try? FileManager.default.copyItem(at: builtPDF, to: destURL)
             }
         }
+    }
+
+    // MARK: - Custom Fonts & Editor Typography
+
+    public var availableEditorFontNames: [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+        for font in customFonts where font.isMonospace {
+            if seen.insert(font.postScriptName).inserted {
+                result.append(font.postScriptName)
+            }
+        }
+        for family in fontLibraryService.systemFontFamilies(monospaceOnly: true) {
+            if seen.insert(family).inserted {
+                result.append(family)
+            }
+        }
+        return result
+    }
+
+    public var availableSystemFontFamilies: [String] {
+        fontLibraryService.systemFontFamilies(monospaceOnly: false)
+    }
+
+    public func openImportFontPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Custom Fonts (.ttf, .otf, .ttc)"
+        panel.message = "Select TrueType or OpenType font files to import into LaTeXaP."
+        let fontTypes: [UTType] = ["ttf", "otf", "ttc"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = fontTypes.isEmpty ? [.font] : fontTypes
+        panel.allowsMultipleSelection = true
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            importCustomFonts(urls: panel.urls)
+        }
+    }
+
+    public func importCustomFonts(urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        isImportingFont = true
+        fontErrorMessage = nil
+        fontSuccessMessage = nil
+        Task { [weak self] in
+            await self?.importCustomFontsAsync(urls: urls)
+        }
+    }
+
+    public func importCustomFontsAsync(urls: [URL]) async {
+        guard !urls.isEmpty else { return }
+        isImportingFont = true
+        fontErrorMessage = nil
+        fontSuccessMessage = nil
+        defer { isImportingFont = false }
+
+        let service = fontLibraryService
+        let outcome: (imported: [CustomFontRecord], errors: [String], refreshed: [CustomFontRecord]?) = await Task.detached(priority: .userInitiated) {
+            var imported: [CustomFontRecord] = []
+            var errors: [String] = []
+
+            for url in urls {
+                do {
+                    let record = try service.importFont(from: url)
+                    imported.append(record)
+                } catch {
+                    errors.append(error.localizedDescription)
+                }
+            }
+
+            let refreshed = try? service.loadManifest()
+            return (imported, errors, refreshed)
+        }.value
+
+        if let refreshed = outcome.refreshed {
+            customFonts = refreshed
+        }
+
+        if !outcome.imported.isEmpty {
+            if outcome.imported.count == 1 {
+                fontSuccessMessage = "Added '\(outcome.imported[0].displayName)' — ready to preview and insert."
+            } else {
+                fontSuccessMessage = "Added \(outcome.imported.count) custom fonts — ready to preview and insert."
+            }
+        }
+
+        if !outcome.errors.isEmpty {
+            fontErrorMessage = outcome.errors.joined(separator: " ")
+        }
+    }
+
+    public func deleteCustomFont(_ font: CustomFontRecord) {
+        fontErrorMessage = nil
+        fontSuccessMessage = nil
+        do {
+            try fontLibraryService.deleteFont(id: font.id)
+            customFonts.removeAll { $0.id == font.id }
+            if editorFontName == font.postScriptName || editorFontName == font.familyName {
+                editorFontName = ""
+            }
+            fontSuccessMessage = "Removed '\(font.displayName)' from library."
+        } catch {
+            fontErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func renameCustomFont(_ font: CustomFontRecord, to newName: String) {
+        fontErrorMessage = nil
+        fontSuccessMessage = nil
+        do {
+            let updated = try fontLibraryService.renameFont(id: font.id, newDisplayName: newName)
+            if let idx = customFonts.firstIndex(where: { $0.id == updated.id }) {
+                customFonts[idx] = updated
+            }
+            fontSuccessMessage = "Renamed font to '\(updated.displayName)'."
+        } catch {
+            fontErrorMessage = error.localizedDescription
+        }
+    }
+
+    public func applyCustomFontToDocument(
+        _ font: CustomFontRecord,
+        role: LaTeXFontRole,
+        customCommand: String = "\\customfont"
+    ) {
+        let statement = fontLibraryService.generateFontspecBlock(
+            for: font,
+            role: role,
+            customCommandName: customCommand
+        )
+        guard !statement.isEmpty else {
+            fontErrorMessage = "Font filename contains no valid LaTeX characters."
+            return
+        }
+        applyFontspecDeclaration(statement, role: role, customCommand: customCommand)
+        fontErrorMessage = nil
+        fontSuccessMessage = "Inserted \(statement) into preamble."
+    }
+
+    public func applySystemFontToDocument(
+        familyName: String,
+        role: LaTeXFontRole,
+        customCommand: String = "\\customfont"
+    ) {
+        let statement = fontLibraryService.generateSystemFontspecBlock(
+            familyName: familyName,
+            role: role,
+            customCommandName: customCommand
+        )
+        guard !statement.isEmpty else {
+            fontErrorMessage = "Font family name contains no valid LaTeX characters."
+            return
+        }
+        applyFontspecDeclaration(statement, role: role, customCommand: customCommand)
+        fontErrorMessage = nil
+        fontSuccessMessage = "Inserted \(statement) into preamble."
+    }
+
+    public func applyCTANFontPreset(_ preset: CTANFontPreset) {
+        let statement = preset.usepackageStatement
+        if !sourceText.contains("\\usepackage{\(preset.packageName)}") && !sourceText.contains(statement) {
+            var lines = sourceText.components(separatedBy: .newlines)
+            if let docClassIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("\\documentclass") }) {
+                lines.insert(statement, at: docClassIndex + 1)
+                sourceText = lines.joined(separator: "\n")
+            } else {
+                sourceText = statement + "\n" + sourceText
+            }
+        }
+        fontErrorMessage = nil
+        fontSuccessMessage = "Loaded CTAN font package '\(preset.name)'."
+    }
+
+    public func selectEditorFont(_ fontName: String) {
+        editorFontName = fontName
+        fontErrorMessage = nil
+        if fontName.isEmpty {
+            fontSuccessMessage = "Editor font set to System Monospaced."
+        } else {
+            fontSuccessMessage = "Editor font set to '\(fontName)'."
+        }
+    }
+
+    public func resetEditorFontToDefault() {
+        editorFontName = ""
+        editorFontSize = 13.5
+        fontErrorMessage = nil
+        fontSuccessMessage = "Editor font reset to System Monospaced (13.5 pt)."
+    }
+
+    public func clearFontFeedback() {
+        fontErrorMessage = nil
+        fontSuccessMessage = nil
+    }
+
+    private func applyFontspecDeclaration(_ declaration: String, role: LaTeXFontRole, customCommand: String) {
+        var lines = sourceText.components(separatedBy: .newlines)
+        let beginDocIndex = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix("\\begin{document}")
+        })
+        let preambleEnd = beginDocIndex ?? lines.count
+
+        // 1. Ensure \usepackage{fontspec} is loaded in the preamble
+        let fontspecPkgRegex = try? NSRegularExpression(
+            pattern: #"\\usepackage(?:\[[^\]]*\])?\{[^}]*\bfontspec\b[^}]*\}"#
+        )
+        var fontspecLineIndex: Int?
+        for idx in 0..<preambleEnd {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("%") { continue }
+            let nsLine = lines[idx] as NSString
+            if fontspecPkgRegex?.firstMatch(in: lines[idx], range: NSRange(location: 0, length: nsLine.length)) != nil {
+                fontspecLineIndex = idx
+                break
+            }
+        }
+
+        var updatedPreambleEnd = preambleEnd
+        if fontspecLineIndex == nil {
+            if let docClassIdx = lines[0..<preambleEnd].firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix("\\documentclass")
+            }) {
+                lines.insert("\\usepackage{fontspec}", at: docClassIdx + 1)
+                fontspecLineIndex = docClassIdx + 1
+            } else {
+                lines.insert("\\usepackage{fontspec}", at: 0)
+                fontspecLineIndex = 0
+            }
+            updatedPreambleEnd += 1
+        }
+
+        // 2. Replace existing role declaration in preamble if present, else insert cleanly
+        let replacePattern: String
+        switch role {
+        case .main:
+            replacePattern = #"^\s*\\setmainfont(?:\[[^\]]*\])?\{[^}]*\}.*$"#
+        case .sans:
+            replacePattern = #"^\s*\\setsansfont(?:\[[^\]]*\])?\{[^}]*\}.*$"#
+        case .mono:
+            replacePattern = #"^\s*\\setmonofont(?:\[[^\]]*\])?\{[^}]*\}.*$"#
+        case .customFamily:
+            let sanitizedCmd = NSRegularExpression.escapedPattern(
+                for: FontLibraryService.sanitizeCustomCommandName(customCommand)
+            )
+            replacePattern = #"^\s*\\newfontfamily\s*\{?\\\#(sanitizedCmd)\}?(?:\[[^\]]*\])?\{[^}]*\}.*$"#
+        }
+
+        let replaceRegex = try? NSRegularExpression(pattern: replacePattern)
+        for idx in 0..<updatedPreambleEnd {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("%") { continue }
+            let nsLine = lines[idx] as NSString
+            if replaceRegex?.firstMatch(in: lines[idx], range: NSRange(location: 0, length: nsLine.length)) != nil {
+                lines[idx] = declaration
+                sourceText = lines.joined(separator: "\n")
+                return
+            }
+        }
+
+        // Insert after the last fontspec-related line in preamble, or right after \usepackage{fontspec}
+        var insertAt = (fontspecLineIndex ?? 0) + 1
+        for idx in 0..<updatedPreambleEnd {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("\\setmainfont") ||
+                trimmed.hasPrefix("\\setsansfont") ||
+                trimmed.hasPrefix("\\setmonofont") ||
+                trimmed.hasPrefix("\\newfontfamily") {
+                insertAt = idx + 1
+            }
+        }
+        lines.insert(declaration, at: min(insertAt, updatedPreambleEnd))
+        sourceText = lines.joined(separator: "\n")
     }
 }

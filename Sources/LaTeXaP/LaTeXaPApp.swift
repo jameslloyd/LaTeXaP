@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 enum AppMetadata {
-    static let version = "0.1.1"
-    static let build = "2"
+    static let version = "0.1.2"
+    static let build = "3"
     static let repoURLString = "https://github.com/jameslloyd/LaTeXaP"
     static let repoGitURLString = "https://github.com/jameslloyd/LaTeXaP.git"
     static let repoURL = URL(string: "https://github.com/jameslloyd/LaTeXaP")!
@@ -173,6 +173,21 @@ struct LaTeXaPApp: App {
 
             CommandMenu("View") {
                 Toggle("Light Editor Background", isOn: $viewModel.useLightEditorBackground)
+
+                Divider()
+
+                Button("Add Custom Font...") {
+                    viewModel.openImportFontPanel()
+                }
+
+                Button("Manage Fonts...") {
+                    viewModel.showFontManagerSheet = true
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
+                Button("Reset Editor Font to Default") {
+                    viewModel.resetEditorFontToDefault()
+                }
 
                 Divider()
 

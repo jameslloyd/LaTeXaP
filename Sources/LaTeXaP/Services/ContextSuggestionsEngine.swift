@@ -135,16 +135,49 @@ Write your content here.
         let activeEnv = detectInnermostEnvironment(in: prefixLines)
 
         // 4. Actionable quick-fixes for current compilation errors
+        let hasFontspecPackage = source.range(
+            of: #"\\usepackage(?:\[[^\]]*\])?\{[^}]*\bfontspec\b[^}]*\}"#,
+            options: .regularExpression
+        ) != nil
         for diag in diagnostics where diag.severity == .error {
-            if diag.message.contains("Undefined control sequence") {
+            if diag.message.contains("Package fontspec Error") ||
+               (diag.message.contains("Font") && diag.message.contains("cannot be found")) {
                 items.append(
                     ContextAdviceItem(
-                        id: "fix-undef-\(diag.line ?? 0)",
-                        title: "Undefined Control Sequence on Line \(diag.line ?? clampedLine)",
-                        category: "Error Fix",
-                        explanation: "TeX encountered a command it doesn't recognize. Check for typos, ensure required packages (like amsmath, xparse, or pythonhighlight) are loaded, or verify that expl3 commands are inside \\ExplSyntaxOn ... \\ExplSyntaxOff."
+                        id: "fix-fontspec-\(diag.line ?? 0)",
+                        title: "Font Not Found by XeTeX (fontspec)",
+                        category: "Fonts",
+                        explanation: "Tectonic/XeTeX could not locate the specified font. Open the Font Manager (⇧⌘F) to verify your custom font is imported, check the filename or system family name, and ensure \\usepackage{fontspec} is present.",
+                        actionLabel: hasFontspecPackage ? nil : "Load fontspec Package",
+                        packageToInsert: hasFontspecPackage ? nil : "fontspec"
                     )
                 )
+            } else if diag.message.contains("Undefined control sequence") {
+                let usesFontspecCommands = source.contains("\\setmainfont") ||
+                    source.contains("\\setsansfont") ||
+                    source.contains("\\setmonofont") ||
+                    source.contains("\\newfontfamily")
+                if usesFontspecCommands && !hasFontspecPackage {
+                    items.append(
+                        ContextAdviceItem(
+                            id: "fix-missing-fontspec-\(diag.line ?? 0)",
+                            title: "Missing \\usepackage{fontspec} for Font Commands",
+                            category: "Fonts",
+                            explanation: "Font commands like \\setmainfont, \\setsansfont, \\setmonofont, and \\newfontfamily require the fontspec package in XeTeX.",
+                            actionLabel: "Load fontspec Package",
+                            packageToInsert: "fontspec"
+                        )
+                    )
+                } else {
+                    items.append(
+                        ContextAdviceItem(
+                            id: "fix-undef-\(diag.line ?? 0)",
+                            title: "Undefined Control Sequence on Line \(diag.line ?? clampedLine)",
+                            category: "Error Fix",
+                            explanation: "TeX encountered a command it doesn't recognize. Check for typos, ensure required packages (like amsmath, xparse, or pythonhighlight) are loaded, or verify that expl3 commands are inside \\ExplSyntaxOn ... \\ExplSyntaxOff."
+                        )
+                    )
+                }
             }
         }
 

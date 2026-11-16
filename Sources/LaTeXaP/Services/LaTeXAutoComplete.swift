@@ -302,6 +302,34 @@ public enum LaTeXAutoCompleteEngine {
             insertText: "\\usepackage{|}"
         ),
         LaTeXCompletionItem(
+            trigger: "\\setmainfont",
+            signature: "{font}",
+            category: "pkg",
+            detail: "Set main document serif font (fontspec)",
+            insertText: "\\setmainfont{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\setsansfont",
+            signature: "{font}",
+            category: "pkg",
+            detail: "Set document sans-serif font (fontspec)",
+            insertText: "\\setsansfont{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\setmonofont",
+            signature: "{font}",
+            category: "pkg",
+            detail: "Set document monospace font (fontspec)",
+            insertText: "\\setmonofont{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\newfontfamily",
+            signature: "{\\cmd}{font}",
+            category: "pkg",
+            detail: "Define a custom font family command (fontspec)",
+            insertText: "\\newfontfamily{\\|}{}"
+        ),
+        LaTeXCompletionItem(
             trigger: "\\section",
             signature: "{title}",
             category: "doc",
@@ -798,6 +826,26 @@ public enum LaTeXAutoCompleteEngine {
             }
         }
 
+        // Case 0: Cursor is inside \setmainfont{prefix, \setsansfont{prefix, \setmonofont{prefix, or \newfontfamily{\cmd}{prefix
+        if let fontBraceMatch = linePrefix.range(
+            of: #"\\(?:setmainfont|setsansfont|setmonofont)(?:\[[^\]]*\])?\{([a-zA-Z0-9_ .:-]*)$|\\newfontfamily\s*(?:\{?\\[a-zA-Z@]+\}?)\s*(?:\[[^\]]*\])?\{([a-zA-Z0-9_ .:-]*)$"#,
+            options: .regularExpression
+        ) {
+            let matchedSub = String(linePrefix[fontBraceMatch])
+            if let openBraceIdx = matchedSub.lastIndex(of: "{") {
+                let argPrefix = String(matchedSub[matchedSub.index(after: openBraceIdx)...])
+                let argOffset = matchedSub.distance(from: matchedSub.startIndex, to: matchedSub.index(after: openBraceIdx))
+                let matchOffset = linePrefix.distance(from: linePrefix.startIndex, to: fontBraceMatch.lowerBound)
+                let replaceStart = lineRange.location + matchOffset + argOffset
+                let replaceLen = cursorLocation - replaceStart
+                return CompletionQueryContext(
+                    replacementRange: NSRange(location: replaceStart, length: replaceLen),
+                    prefix: argPrefix,
+                    enclosingCommand: "font"
+                )
+            }
+        }
+
         // Case 1: Cursor is inside \begin{prefix, \end{prefix, \usepackage{prefix, \cite{prefix, or \ref{prefix
         if let braceMatch = linePrefix.range(
             of: #"\\(begin|end|usepackage|cite|citep|citet|parencite|ref|eqref|cref)(?:\[[^\]]*\])?\{([a-zA-Z0-9_*:.-]*)$"#,
@@ -859,7 +907,33 @@ public enum LaTeXAutoCompleteEngine {
     }
 
     /// Computes ranked autocomplete suggestions for the current query context and document source.
-    public static func suggestions(for query: CompletionQueryContext, in source: String) -> [LaTeXCompletionItem] {
+    public static func suggestions(
+        for query: CompletionQueryContext,
+        in source: String,
+        customFonts: [CustomFontRecord] = []
+    ) -> [LaTeXCompletionItem] {
+        // 0. Inside \setmainfont{...}, \setsansfont{...}, \setmonofont{...}, \newfontfamily{\cmd}{...}
+        if query.enclosingCommand == "font" {
+            let filter = query.prefix.lowercased()
+            return customFonts.compactMap { font -> LaTeXCompletionItem? in
+                let safeFile = FontLibraryService.sanitizeTeXArgument((font.fileName as NSString).lastPathComponent)
+                guard !safeFile.isEmpty else { return nil }
+                let matches = filter.isEmpty ||
+                    safeFile.lowercased().contains(filter) ||
+                    font.displayName.lowercased().contains(filter) ||
+                    font.familyName.lowercased().contains(filter)
+                guard matches else { return nil }
+                return LaTeXCompletionItem(
+                    trigger: safeFile,
+                    displayTitle: font.displayName,
+                    signature: font.format.displayBadge,
+                    category: "font",
+                    detail: "\(font.familyName) (\(font.styleName)) — \(safeFile)",
+                    insertText: "\(safeFile)|"
+                )
+            }
+        }
+
         // 1. Inside \usepackage{...}
         if query.enclosingCommand == "usepackage" {
             let filter = query.prefix.lowercased()

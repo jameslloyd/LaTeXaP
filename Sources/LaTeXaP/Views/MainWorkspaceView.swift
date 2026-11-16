@@ -1,8 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum SidebarTab: String, CaseIterable, Identifiable {
     case outline = "Outline"
     case packages = "Packages"
+    case fonts = "Fonts"
     case bibliography = "BibTeX"
     case snippets = "LaTeX3"
     case templates = "Templates"
@@ -12,6 +14,7 @@ enum SidebarTab: String, CaseIterable, Identifiable {
         switch self {
         case .outline: return "list.bullet.indent"
         case .packages: return "shippingbox"
+        case .fonts: return "textformat"
         case .bibliography: return "books.vertical"
         case .snippets: return "curlybraces.square"
         case .templates: return "doc.on.doc"
@@ -19,8 +22,16 @@ enum SidebarTab: String, CaseIterable, Identifiable {
     }
 }
 
+@MainActor
+private final class MainWorkspaceUIState: ObservableObject {
+    @Published var showEditorFontPopover: Bool = false
+    @Published var isSidebarFontDropTargeted: Bool = false
+}
+
 public struct MainWorkspaceView: View {
     @ObservedObject var viewModel: DocumentViewModel
+    @StateObject private var uiState = MainWorkspaceUIState()
+    @FocusState private var isFontsToolbarFocused: Bool
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -127,6 +138,16 @@ public struct MainWorkspaceView: View {
                 .help("Open Visual Math Symbol Palette, Matrix Generator & CSV Table Builder")
 
                 Button {
+                    viewModel.showFontManagerSheet = true
+                } label: {
+                    Label("Fonts", systemImage: "textformat")
+                }
+                .focused($isFontsToolbarFocused)
+                .help("Open Font Manager to add, preview, and apply custom or system fonts (⇧⌘F)")
+                .accessibilityLabel("Fonts")
+                .accessibilityHint("Opens the Font Manager sheet")
+
+                Button {
                     viewModel.importFigureViaPanel()
                 } label: {
                     Label("Insert Figure", systemImage: "photo.badge.plus")
@@ -155,6 +176,11 @@ public struct MainWorkspaceView: View {
         .sheet(isPresented: $viewModel.showVisualToolsSheet) {
             VisualToolsSheetView(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.showFontManagerSheet, onDismiss: {
+            isFontsToolbarFocused = true
+        }) {
+            FontManagerView(viewModel: viewModel)
+        }
     }
 
     // MARK: - Sidebar
@@ -165,6 +191,7 @@ public struct MainWorkspaceView: View {
                 ForEach(SidebarTab.allCases) { tab in
                     Image(systemName: tab.icon)
                         .help(tab.rawValue)
+                        .accessibilityLabel(tab.rawValue)
                         .tag(tab.rawValue)
                 }
             }
@@ -178,6 +205,8 @@ public struct MainWorkspaceView: View {
                 outlineTabView
             case .packages:
                 packagesTabView
+            case .fonts:
+                fontsTabView
             case .bibliography:
                 bibliographyTabView
             case .snippets:
@@ -296,6 +325,223 @@ public struct MainWorkspaceView: View {
             }
             .listStyle(.plain)
         }
+    }
+
+    private var fontsTabView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("FONTS & TYPOGRAPHY")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    Button {
+                        viewModel.openImportFontPanel()
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                            .font(.caption)
+                    }
+                    .controlSize(.mini)
+                    .accessibilityLabel("Add custom font files")
+                }
+
+                Button {
+                    viewModel.showFontManagerSheet = true
+                } label: {
+                    Label("Manage & Add Fonts...", systemImage: "textformat")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .accessibilityHint("Opens the Font Manager sheet (Shift-Command-F)")
+
+                if viewModel.isImportingFont {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Importing font...")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let err = viewModel.fontErrorMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.caption2)
+                            .lineLimit(2)
+                        Spacer()
+                        Button {
+                            viewModel.clearFontFeedback()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(6)
+                    .background(Color.red.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                } else if let success = viewModel.fontSuccessMessage {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text(success)
+                            .font(.caption2)
+                            .lineLimit(2)
+                        Spacer()
+                        Button {
+                            viewModel.clearFontFeedback()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(6)
+                    .background(Color.green.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            }
+            .padding(10)
+
+            Divider()
+
+            List {
+                Section("Editor Typography") {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(viewModel.editorFontName.isEmpty ? "System Monospaced" : viewModel.editorFontName)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text("\(String(format: "%.1f", viewModel.editorFontSize)) pt")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Change") {
+                            uiState.showEditorFontPopover = true
+                        }
+                        .controlSize(.mini)
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                Section("Custom Fonts (\(viewModel.customFonts.count))") {
+                    if viewModel.customFonts.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("Drop .ttf, .otf, or .ttc files here", systemImage: "doc.badge.plus")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(uiState.isSidebarFontDropTargeted ? Color.accentColor : Color.secondary)
+                            Text("Or click Add to import fonts for XeTeX (fontspec) and the editor.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    uiState.isSidebarFontDropTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
+                                    style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])
+                                )
+                        )
+                        .onDrop(of: [.fileURL], isTargeted: $uiState.isSidebarFontDropTargeted, perform: handleSidebarFontDrop(providers:))
+                    } else {
+                        ForEach(viewModel.customFonts) { font in
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text(font.displayName)
+                                        .font(Font(LaTeXSyntaxHighlighter.resolveFont(name: font.postScriptName, size: 12.5, weight: .regular)))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(font.format.displayBadge)
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Color.accentColor.opacity(0.14))
+                                        .foregroundStyle(Color.accentColor)
+                                        .clipShape(Capsule())
+                                }
+                                HStack(spacing: 6) {
+                                    Button("Main") {
+                                        viewModel.applyCustomFontToDocument(font, role: .main)
+                                    }
+                                    .controlSize(.mini)
+                                    Button("Sans") {
+                                        viewModel.applyCustomFontToDocument(font, role: .sans)
+                                    }
+                                    .controlSize(.mini)
+                                    Button("Mono") {
+                                        viewModel.applyCustomFontToDocument(font, role: .mono)
+                                    }
+                                    .controlSize(.mini)
+                                    if font.isMonospace {
+                                        Button("Editor") {
+                                            viewModel.selectEditorFont(font.postScriptName)
+                                        }
+                                        .controlSize(.mini)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 3)
+                        }
+                    }
+                }
+
+                Section("CTAN Font Packages") {
+                    ForEach(LaTeXCatalog.ctanFontPresets) { preset in
+                        let isIncluded = viewModel.sourceText.contains("{\(preset.packageName)}")
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(preset.name)
+                                    .font(.system(size: 12, weight: .semibold))
+                                Text(preset.classification)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(isIncluded ? "Added" : "Insert") {
+                                viewModel.applyCTANFontPreset(preset)
+                            }
+                            .controlSize(.mini)
+                            .disabled(isIncluded)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .onDrop(of: [.fileURL], isTargeted: $uiState.isSidebarFontDropTargeted, perform: handleSidebarFontDrop(providers:))
+        }
+    }
+
+    private func handleSidebarFontDrop(providers: [NSItemProvider]) -> Bool {
+        let lock = NSLock()
+        var urls: [URL] = []
+        let group = DispatchGroup()
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                if let data = item as? Data,
+                   let url = URL(dataRepresentation: data, relativeTo: nil),
+                   url.isFileURL {
+                    lock.lock()
+                    urls.append(url)
+                    lock.unlock()
+                } else if let url = item as? URL, url.isFileURL {
+                    lock.lock()
+                    urls.append(url)
+                    lock.unlock()
+                }
+            }
+        }
+        group.notify(queue: .main) {
+            if !urls.isEmpty {
+                viewModel.importCustomFonts(urls: urls)
+            }
+        }
+        return true
     }
 
     private var bibliographyTabView: some View {
@@ -482,6 +728,27 @@ public struct MainWorkspaceView: View {
                 Spacer()
 
                 Button {
+                    uiState.showEditorFontPopover.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "textformat.size")
+                        Text(viewModel.editorFontName.isEmpty ? "System Mono" : viewModel.editorFontName)
+                            .lineLimit(1)
+                        Text("\(String(format: "%.0f", viewModel.editorFontSize))pt")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.system(size: 10.5, weight: .medium))
+                }
+                .buttonStyle(.borderless)
+                .popover(isPresented: $uiState.showEditorFontPopover, arrowEdge: .bottom) {
+                    EditorFontPopoverView(viewModel: viewModel)
+                }
+                .help("Configure code editor font family and size")
+                .accessibilityLabel("Editor Font")
+                .accessibilityValue("\(viewModel.editorFontName.isEmpty ? "System Monospaced" : viewModel.editorFontName), \(String(format: "%.1f", viewModel.editorFontSize)) points")
+                .accessibilityHint("Opens popover to select editor font family and size")
+
+                Button {
                     viewModel.useLightEditorBackground.toggle()
                 } label: {
                     HStack(spacing: 4) {
@@ -509,9 +776,14 @@ public struct MainWorkspaceView: View {
                 jumpToLineRequest: $viewModel.jumpToLineRequest,
                 diagnostics: viewModel.diagnostics,
                 fontSize: viewModel.editorFontSize,
+                fontName: viewModel.editorFontName,
+                customFonts: viewModel.customFonts,
                 lightBackground: viewModel.useLightEditorBackground,
                 onDropImageFile: { droppedURL in
                     viewModel.handleDroppedImageURL(droppedURL)
+                },
+                onDropFontFiles: { droppedFontURLs in
+                    viewModel.importCustomFonts(urls: droppedFontURLs)
                 }
             )
         }
