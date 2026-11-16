@@ -42,23 +42,22 @@
    - **Full TeX Transcript**: Inspect the complete `.log` output.
    - **Context Suggestions**: Region-aware guidance that adapts to where your cursor is (`Empty Document — Getting Started`, `Document Preamble`, `LaTeX3 Programming Block (\ExplSyntaxOn)`, or active `\begin{...}` environments) with one-click code & package insertion.
 
-4. **Python & Scientific Computing + Starter Templates**
-   - Includes 5 ready-to-compile starter templates:
-     - *LaTeX3 (`expl3` + `xparse`) Showcase* (`l3int`, `l3fp`, `l3seq`, custom environments)
-     - *Academic Research Article* (Two-column IEEE/ACM-style with spanning abstract, theorems, and bibliography)
-     - *Python & Scientific Computing in LaTeX3* (`listings`, `pythonhighlight`, `pythontex`, `minted`, `algorithm2e`)
-     - *LaTeX3 Key-Value Interface (`l3keys`)* (`\keys_define:nn`)
-     - *TikZ & PGF Vector Diagrams*
+4. **Academic Paper Authoring Suite (`v0.2.0`) & Starter Templates**
+   - **Academic Templates & Paper Setup Wizard (`⇧⌘N`)**: Ready-to-compile templates for **APA 7th Ed.**, **IEEE Conference**, **ACM Article**, **MLA Essay**, **STEM Lab Report**, **University Thesis**, and **Beamer Slides** (plus LaTeX3 `expl3`/`xparse`, Python scientific computing, and TikZ starters). Configure Title, Author, Institution, Course/Venue, Paper Size, Double-Spacing, and **Anonymized Blind Review** (`lineno`) via the Paper Setup Wizard.
+   - **Smart Citations & `.bib` Management (`⇧⌘K`)**: Search **CrossRef** by title/author/keyword or fetch by **DOI / arXiv / ISBN**, drag-and-drop `.bib` files, switch bibliography styles (`APA`, `IEEE`, `ACM`, `MLA`, `Chicago`, `Nature`), and insert `\cite`, `\parencite`, `\textcite`, `\autocite`, or `\footcite` with optional page locators.
+   - **Plain-English Error Demystifier & Pre-Flight Checklist**: Translates common TeX errors into student-friendly cards with **1-Click Auto-Fix** actions, and checks unresolved `\cite`/`\ref` keys, uncited `.bib` entries, missing/absolute figure paths, and typography hygiene before submission.
+   - **Visual Spreadsheet Table, `pgfplots` Chart & Relative Figure Assistant**: Build `booktabs` tables in a 2D editable grid or CSV mode, generate `pgfplots` line/bar/scatter charts from CSV data, and import/drop images into relative `figures/` folders with single or side-by-side (`subcaption`) layouts.
+   - **Rubric Word/Page Budgets, Prose Spellcheck (`⌥⌘;`) & Submission `.zip` Export (`⌥⇧⌘E`)**: Track prose-only, abstract, and page budgets from the status bar (with optional **Student Mode**), toggle LaTeX-aware prose spellcheck, and bundle `.tex`, `.bib`, `figures/`, and fonts into a clean `.zip` archive.
 
 5. **Custom Fonts & Editor Typography (`v0.1.2`)**
    - **Font Manager (`⇧⌘F`) & Fonts Sidebar Tab**: Import local `.ttf`, `.otf`, and `.ttc` font files (via **View → Add Custom Font...**, **Add Font...**, or drag-and-drop), preview live customizable specimens (`10–36 pt`, Light/Dark surface), rename, and safely remove managed fonts with reference-aware confirmation.
    - **XeTeX (`fontspec`) & CTAN Font Presets**: Apply custom fonts or macOS system fonts directly to your document's **Main** (`\setmainfont`), **Sans** (`\setsansfont`), **Mono** (`\setmonofont`), or named **`\newfontfamily`** preamble roles, or insert one-click CTAN font packages (`libertinus`, `ebgaramond`, `fira`, `plex`, `lmodern`, `tgpagella`). Managed fonts are stored non-invasively in `~/Library/Application Support/LaTeXaP/Fonts/` and automatically exposed to Tectonic.
    - **Code Editor Font Picker**: Choose System Monospaced, any macOS monospaced font, or an imported custom font (`10–24 pt`) from the editor header popover or Font Manager, persisted across launches.
 
-6. **PDF Export**
-   - Export compiled PDF documents directly via the toolbar (**Export PDF** / `⇧⌘E`).
+6. **PDF & Submission Export**
+   - Export compiled PDF documents (**Export PDF** / `⇧⌘E`) or self-contained submission packages (**Export Submission Bundle (.zip)** / `⌥⇧⌘E`).
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes and [docs/custom-fonts-architecture.md](docs/custom-fonts-architecture.md) / [docs/custom-fonts-ux.md](docs/custom-fonts-ux.md) for technical and UX design details.
+See [CHANGELOG.md](CHANGELOG.md) for release notes, [docs/academic-suite-architecture.md](docs/academic-suite-architecture.md) / [docs/academic-suite-ux.md](docs/academic-suite-ux.md) for the v0.2.0 Academic Suite design, and [docs/custom-fonts-architecture.md](docs/custom-fonts-architecture.md) / [docs/custom-fonts-ux.md](docs/custom-fonts-ux.md) for custom font architecture.
 
 ---
 

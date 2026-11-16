@@ -5,7 +5,24 @@ public struct LaTeXTemplate: Identifiable, Sendable {
     public let name: String
     public let subtitle: String
     public let icon: String
+    public let category: String
     public let content: String
+
+    public init(
+        id: String,
+        name: String,
+        subtitle: String,
+        icon: String,
+        category: String = "LaTeX3 Core",
+        content: String
+    ) {
+        self.id = id
+        self.name = name
+        self.subtitle = subtitle
+        self.icon = icon
+        self.category = category
+        self.content = content
+    }
 }
 
 public struct LaTeXSnippet: Identifiable, Sendable {
@@ -596,6 +613,404 @@ def newton_raphson(
 
 \end{document}
 """#
+        ),
+        LaTeXTemplate(
+            id: "apa7-student",
+            name: "APA 7th Student Paper",
+            subtitle: "Double-spaced APA 7th edition student paper with running head, abstract, and biblatex APA citations",
+            icon: "doc.text",
+            category: "Academic Papers",
+            content: #"""
+\documentclass[12pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{fancyhdr}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[style=authoryear,backend=bibtex]{biblatex}
+\usepackage{csquotes}
+\usepackage{hyperref}
+
+\doublespacing
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\footnotesize RUNNING HEAD: SHORT TITLE}
+\rhead{\footnotesize \thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\title{\textbf{Impact of Retrieval-Augmented Study Tools on Undergraduate Academic Writing}}
+\author{Student Author \\ Department of Psychology, State University \\ Course: PSYC 301 — Research Methods}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This paper examines how structured citation workflows and real-time typesetting feedback influence clarity, citation accuracy, and adherence to APA 7th edition formatting guidelines among undergraduate researchers.
+\end{abstract}
+
+\section{Introduction}
+Clear scholarly communication depends on accurate attribution of prior findings and consistent structural formatting. When students manage references manually, typographical drift frequently introduces unresolved citations and formatting inconsistencies.
+
+\section{Method}
+\subsection{Participants and Design}
+Participants drafted a 1,500-word literature synthesis using either manual reference lists or integrated BibTeX workflows.
+
+\section{Results}
+Preliminary comparisons summarized in Table~\ref{tab:apa-results} indicate higher reference completeness in structured environments.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Comparison of Citation Accuracy Across Authoring Workflows}
+  \label{tab:apa-results}
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    \textbf{Condition} & \textbf{Citation Errors} & \textbf{Completion (min)} \\
+    \midrule
+    Manual Formatting & 4.2 & 48.5 \\
+    Structured LaTeX & 0.3 & 31.0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Discussion}
+Automated pre-flight validation substantially reduces avoidable submission errors prior to final grading.
+
+\end{document}
+"""#
+        ),
+        LaTeXTemplate(
+            id: "ieee-conference",
+            name: "IEEE Conference Paper",
+            subtitle: "Two-column IEEE engineering conference paper with abstract, index terms, equations, and tables",
+            icon: "cpu",
+            category: "Academic Papers",
+            content: #"""
+\documentclass[conference,letterpaper]{IEEEtran}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage[style=ieee,backend=bibtex]{biblatex}
+\usepackage{hyperref}
+
+\title{Low-Latency Deterministic Compilation Pipelines for Interactive Document Engineering}
+
+\author{
+  \IEEEauthorblockN{Alex Rivera\IEEEauthorrefmark{1} and Jordan Chen\IEEEauthorrefmark{2}}
+  \IEEEauthorblockA{\IEEEauthorrefmark{1}Department of Electrical Engineering and Computer Science, Tech Institute\\
+  Email: arivera@institute.edu}
+  \IEEEauthorblockA{\IEEEauthorrefmark{2}Systems Research Lab, National University\\
+  Email: jchen@national.edu}
+}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present an incremental TeX compilation architecture tailored for desktop authoring environments. By staging local bibliography and figure assets into isolated build workspaces and synchronizing PDF coordinates via SyncTeX, our pipeline achieves sub-second incremental previews without polluting source directories.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Typesetting systems, incremental compilation, SyncTeX, scholarly authoring.
+\end{IEEEkeywords}
+
+\section{Introduction}
+Interactive engineering papers frequently combine complex mathematics, vector charts, and dense empirical tables. Waiting several seconds for full rebuilds interrupts writer flow and slows iteration.
+
+\section{System Architecture}
+Let $\tau_{\text{compile}}$ denote end-to-end build latency from source edit to PDF swap:
+\begin{equation}\label{eq:latency}
+  \tau_{\text{compile}} = \tau_{\text{stage}} + \tau_{\text{xetex}} + \tau_{\text{render}}.
+\end{equation}
+As shown in Equation~\eqref{eq:latency}, minimizing asset staging overhead $\tau_{\text{stage}}$ via validated symbolic links reduces total rebuild latency below \qty{450}{ms}.
+
+\section{Empirical Evaluation}
+Table~\ref{tab:ieee-bench} summarizes measured compilation times across document sizes.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Incremental Build Latency Across Document Lengths}
+  \label{tab:ieee-bench}
+  \begin{tabular}{@{}lcc@{}}
+    \toprule
+    \textbf{Document Size} & \textbf{Cold Build (ms)} & \textbf{Warm Build (ms)} \\
+    \midrule
+    4 Pages & 1120 & 310 \\
+    12 Pages & 1840 & 465 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Conclusion}
+Isolated staging paired with SyncTeX feedback yields responsive engineering paper authoring.
+
+\end{document}
+"""#
+        ),
+        LaTeXTemplate(
+            id: "acm-article",
+            name: "ACM Computing Article",
+            subtitle: "ACM SIGCONF/sigplan-ready computing research manuscript with CCS structure and booktabs",
+            icon: "laptopcomputer",
+            category: "Academic Papers",
+            content: #"""
+\documentclass[sigconf,nonacm]{acmart}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{siunitx}
+
+\title{Human-Centered Tooling for Reproducible LaTeX Authoring}
+
+\author{Taylor Morgan}
+\affiliation{%
+  \institution{University of Computing}
+  \city{Seattle}
+  \state{WA}
+  \country{USA}
+}
+\email{tmorgan@computing.edu}
+
+\begin{abstract}
+Modern computer science manuscripts depend on reproducible artifact bundles, clean vector plots, and strict conference page budgets. We describe a desktop workflow that surfaces plain-English compiler diagnostics and validates submission bundles automatically.
+\end{abstract}
+
+\keywords{Authoring tools, reproducibility, LaTeX, usability}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+Researchers routinely assemble camera-ready archives under tight conference deadlines. Uncaught absolute image paths or missing bibliography entries remain common causes of submission rejections.
+
+\section{Design Goals}
+\begin{itemize}
+  \item Maintain transparent, human-editable LaTeX source code.
+  \item Validate citations, cross-references, and relative figure paths continuously.
+  \item Package deterministic self-contained submission archives.
+\end{itemize}
+
+\section{Evaluation}
+In our formative study, participants resolved formatting diagnostics \qty{62}{\%} faster when presented with plain-English explanations alongside one-click safe source patches.
+
+\end{document}
+"""#
+        ),
+        LaTeXTemplate(
+            id: "mla-essay",
+            name: "MLA Humanities Essay",
+            subtitle: "MLA 9th edition double-spaced humanities essay with student header, block quotes, and MLA style",
+            icon: "text.book.closed",
+            category: "Academic Papers",
+            content: #"""
+\documentclass[12pt,letterpaper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{setspace}
+\usepackage{fancyhdr}
+\usepackage[style=mla,backend=bibtex]{biblatex}
+\usepackage{csquotes}
+\usepackage{hyperref}
+
+\doublespacing
+\setlength{\parindent}{0.5in}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Lastname \thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+\begin{document}
+
+\noindent
+First Lastname\\
+Professor Name\\
+ENGL 210: Modern Literature\\
+\today
+
+\begin{center}
+Narrative Architecture in Twentieth-Century Epistolary Fiction
+\end{center}
+
+Epistolary framing devices invite readers to reconstruct historical meaning from fragmentary personal records rather than from an omniscient narrator. By foregrounding the materiality of letters, diaries, and marginal annotations, twentieth-century novelists transform transmission gaps into central sites of interpretive tension.
+
+\section*{Archival Fragments and Unreliable Witnessing}
+When correspondence is interrupted or selectively preserved, silence becomes structurally expressive. Readers must weigh competing chronologies and infer motives across unstated intervals, mirroring the work of archival scholarship itself.
+
+\end{document}
+"""#
+        ),
+        LaTeXTemplate(
+            id: "stem-lab-report",
+            name: "STEM Lab Report",
+            subtitle: "Physics, Chemistry, & Engineering laboratory report with siunitx units, mhchem formulas, and error analysis",
+            icon: "flask",
+            category: "STEM & Theses",
+            content: #"""
+\documentclass[11pt,letterpaper]{article}
+\usepackage[margin=0.9in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage[version=4]{mhchem}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{hyperref}
+
+\title{\textbf{Laboratory Report: Determination of Gravitational Acceleration via Simple Pendulum}}
+\author{Lab Partner A \and Lab Partner B \\ Course: PHYS 101L — Experimental Mechanics}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We measure the oscillation period $T$ of a simple pendulum across five string lengths $L \in [\qty{0.20}{m}, \qty{1.00}{m}]$ to determine local gravitational acceleration $g$. Linear regression of $T^2$ versus $L$ yields $g = \qty{9.79(8)}{m/s^2}$, consistent with the accepted value within experimental uncertainty.
+\end{abstract}
+
+\section{Objective \& Theory}
+For small angular displacements ($\theta_0 < \qty{10}{\degree}$), the period $T$ obeys:
+\begin{equation}\label{eq:pendulum}
+  T = 2\pi \sqrt{\frac{L}{g}} \quad \Longrightarrow \quad T^2 = \frac{4\pi^2}{g} L.
+\end{equation}
+In complementary titration calibration checks, aqueous neutralization followed $\ce{HCl + NaOH -> NaCl + H2O}$.
+
+\section{Experimental Data}
+\begin{table}[htbp]
+  \centering
+  \caption{Measured Pendulum Length and Mean Oscillation Period ($N = 10$ Trials)}
+  \label{tab:lab-data}
+  \begin{tabular}{@{}SSS@{}}
+    \toprule
+    {\textbf{Length $L$ (\unit{m})}} & {\textbf{Period $T$ (\unit{s})}} & {\textbf{$T^2$ (\unit{s^2})}} \\
+    \midrule
+    0.20 & 0.90 & 0.81 \\
+    0.40 & 1.27 & 1.61 \\
+    0.60 & 1.56 & 2.43 \\
+    0.80 & 1.80 & 3.24 \\
+    1.00 & 2.01 & 4.04 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Error Analysis \& Conclusion}
+Propagating timing uncertainty $\delta T = \qty{0.02}{s}$ and length uncertainty $\delta L = \qty{0.002}{m}$ yields a relative error below \qty{1.0}{\%}.
+
+\end{document}
+"""#
+        ),
+        LaTeXTemplate(
+            id: "university-thesis",
+            name: "University Thesis / Dissertation",
+            subtitle: "Multi-chapter book-class thesis with table of contents, list of figures/tables, and theorem support",
+            icon: "books.vertical",
+            category: "STEM & Theses",
+            content: #"""
+\documentclass[12pt,letterpaper,oneside]{book}
+\usepackage[margin=1.25in]{geometry}
+\usepackage{setspace}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[style=authoryear,backend=bibtex]{biblatex}
+\usepackage{csquotes}
+\usepackage{hyperref}
+
+\onehalfspacing
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{definition}{Definition}[chapter]
+
+\title{\textbf{Scalable Symbolic-Numeric Methods for Structured Scientific Modeling}}
+\author{Doctoral Candidate Name \\ Department of Applied Mathematics \\ University Graduate School}
+\date{\today}
+
+\begin{document}
+
+\frontmatter
+\maketitle
+
+\chapter*{Abstract}
+This dissertation investigates hybrid symbolic-numeric algorithms that preserve algebraic invariants during long-horizon physical simulations.
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\mainmatter
+
+\chapter{Introduction}
+\section{Motivation and Scope}
+Long-horizon numerical integration often suffers from secular energy drift when discrete schemes ignore underlying geometric structure.
+
+\section{Dissertation Outline}
+Chapter 2 establishes theoretical stability guarantees; Chapter 3 evaluates benchmark accuracy across stiff oscillatory systems.
+
+\chapter{Theoretical Foundations}
+\begin{definition}[Symplectic Step]
+A one-step integrator $\Phi_h$ is symplectic if its Jacobian preserves the canonical two-form $\omega = \mathrm{d}p \wedge \mathrm{d}q$.
+\end{definition}
+
+\end{document}
+"""#
+        ),
+        LaTeXTemplate(
+            id: "beamer-slides",
+            name: "Academic Beamer Presentation",
+            subtitle: "16:9 conference & thesis defense slide deck with Madrid/metropolis structure, blocks, and equations",
+            icon: "play.rectangle",
+            category: "STEM & Theses",
+            content: #"""
+\documentclass[aspectratio=169]{beamer}
+\usetheme{Madrid}
+\usecolortheme{default}
+
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+
+\title[Thesis Defense]{Deterministic Authoring Pipelines for Scholarly Publishing}
+\author{Presenter Name}
+\institute{Department of Computer Science}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation}
+\begin{frame}{Why Authoring Ergonomics Matter}
+  \begin{itemize}
+    \item Graduate students spend hours debugging cryptic TeX error logs.
+    \item Broken relative asset paths cause last-minute submission failures.
+    \item Instant pre-flight feedback eliminates avoidable formatting penalties.
+  \end{itemize}
+\end{frame}
+
+\section{Core Results}
+\begin{frame}{Key Formulation}
+  \begin{block}{Objective Function}
+    Minimize editing friction while preserving full \LaTeX{} transparency:
+    \[
+      \mathcal{L} = \tau_{\text{compile}} + \lambda \, \text{Errors}_{\text{unresolved}}.
+    \]
+  \end{block}
+\end{frame}
+
+\begin{frame}{Summary}
+  \begin{itemize}
+    \item Real-time prose spellchecking + bibliography style switching.
+    \item Clean self-contained \texttt{.zip} submission packaging.
+  \end{itemize}
+\end{frame}
+
+\end{document}
+"""#
         )
     ]
 
@@ -784,7 +1199,17 @@ def gradient_step(x: list[float], lr: float = 1e-2) -> list[float]:
         LaTeXPackagePreset(id: "minted", package: "minted", options: "frozencache", category: "Python & Code", description: "Pygments-based syntax highlighting for Python and 300+ languages (\\begin{minted}{python})."),
         LaTeXPackagePreset(id: "pyluatex", package: "pyluatex", options: "", category: "Python & Code", description: "Embed and evaluate Python sessions directly inside LaTeX documents."),
         LaTeXPackagePreset(id: "listings", package: "listings", options: "", category: "Python & Code", description: "Pure-TeX source code printer supporting language=Python without external shell-escape."),
-        LaTeXPackagePreset(id: "algorithm2e", package: "algorithm2e", options: "ruled,vlined,linesnumbered", category: "Python & Code", description: "Publication-grade algorithmic pseudocode blocks (\\KwIn, \\KwOut, \\For, \\While).")
+        LaTeXPackagePreset(id: "algorithm2e", package: "algorithm2e", options: "ruled,vlined,linesnumbered", category: "Python & Code", description: "Publication-grade algorithmic pseudocode blocks (\\KwIn, \\KwOut, \\For, \\While)."),
+        LaTeXPackagePreset(id: "biblatex", package: "biblatex", options: "style=authoryear,backend=bibtex", category: "Academic Writing", description: "Modern configurable bibliography engine supporting APA-compatible author-year, IEEE, MLA, Chicago, and Nature styles."),
+        LaTeXPackagePreset(id: "natbib", package: "natbib", options: "", category: "Academic Writing", description: "Flexible author-year and numerical citations (\\citep, \\citet)."),
+        LaTeXPackagePreset(id: "pgfplots", package: "pgfplots", options: "", category: "Graphics & Color", description: "Publication-grade data plots, bar charts, and scatter plots directly inside TikZ."),
+        LaTeXPackagePreset(id: "subcaption", package: "subcaption", options: "", category: "Graphics & Color", description: "Side-by-side subfigures and subtables with individual subcaptions (\\begin{subfigure})."),
+        LaTeXPackagePreset(id: "setspace", package: "setspace", options: "", category: "Academic Writing", description: "Clean single, 1.5x, and double line spacing (\\doublespacing, \\onehalfspacing)."),
+        LaTeXPackagePreset(id: "lineno", package: "lineno", options: "", category: "Academic Writing", description: "Margin line numbers for anonymous peer review and manuscript submissions (\\linenumbers)."),
+        LaTeXPackagePreset(id: "apa7", package: "apa7", options: "stu", category: "Academic Writing", description: "Official APA 7th edition student and manuscript document formatting."),
+        LaTeXPackagePreset(id: "IEEEtran", package: "IEEEtran", options: "", category: "Academic Writing", description: "IEEE Transactions and conference paper styling macros."),
+        LaTeXPackagePreset(id: "acmart", package: "acmart", options: "", category: "Academic Writing", description: "Association for Computing Machinery conference and journal formatting."),
+        LaTeXPackagePreset(id: "mhchem", package: "mhchem", options: "version=4", category: "Mathematics", description: "Typeset chemical formulas and reaction equations effortlessly (\\ce{H2O}, \\ce{A -> B}).")
     ]
 
     public static let ctanFontPresets: [CTANFontPreset] = [
@@ -837,4 +1262,132 @@ def gradient_step(x: list[float], lr: float = 1e-2) -> list[float]:
             description: "Palatino-inspired academic book serif with crisp small caps and old-style figures."
         )
     ]
+
+    /// Builds a customized academic starter document from `PaperSetupConfig` with sanitized TeX metadata.
+    public static func generateWizardDocument(from config: PaperSetupConfig) -> String {
+        let baseTemplate = templates.first(where: { $0.id == config.templateId })
+            ?? templates.first(where: { $0.id == "apa7-student" })
+            ?? defaultTemplate
+
+        var source = baseTemplate.content
+        let pt = min(max(config.baseFontSizePt, 10), 12)
+        let paperOpt = config.paperSize.rawValue
+
+        // 1. Update documentclass paper size & font size if standard article/book class options exist
+        if let docRegex = try? NSRegularExpression(pattern: #"^\\documentclass(?:\[([^\]]*)\])?\{([^}]+)\}"#, options: [.anchorsMatchLines]),
+           let match = docRegex.firstMatch(in: source, range: NSRange(location: 0, length: (source as NSString).length)) {
+            let ns = source as NSString
+            let existingOpts = match.range(at: 1).location != NSNotFound ? ns.substring(with: match.range(at: 1)) : ""
+            let docClass = ns.substring(with: match.range(at: 2))
+            if docClass == "article" || docClass == "book" || docClass == "report" {
+                var opts = existingOpts
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.hasSuffix("pt") && $0 != "letterpaper" && $0 != "a4paper" && !$0.isEmpty }
+                opts.insert("\(pt)pt", at: 0)
+                opts.insert(paperOpt, at: 1)
+                let newDecl = "\\documentclass[\(opts.joined(separator: ","))]{\(docClass)}"
+                if let swiftRange = Range(match.range, in: source) {
+                    source.replaceSubrange(swiftRange, with: newDecl)
+                }
+            }
+        }
+
+        // 2. Sanitize and apply Title / Author / Institution / Course
+        let cleanTitle = AcademicSanitizer.escapeLaTeXText(config.title, allowSafeInlineMath: true)
+        let safeTitle = cleanTitle.isEmpty ? "Untitled Academic Paper" : cleanTitle
+
+        let safeAuthor: String
+        if config.anonymizedBlindReview {
+            safeAuthor = "Anonymous Author(s) \\\\ Anonymous Institution"
+        } else {
+            let authorName = AcademicSanitizer.escapeLaTeXText(config.author)
+            let institution = AcademicSanitizer.escapeLaTeXText(config.institution)
+            let course = AcademicSanitizer.escapeLaTeXText(config.courseOrVenue)
+            let parts = [
+                authorName.isEmpty ? "Student Author" : authorName,
+                institution,
+                course
+            ].filter { !$0.isEmpty }
+            safeAuthor = parts.joined(separator: " \\\\ ")
+        }
+
+        source = replaceTopLevelCommandArg(in: source, command: "title", newArg: "\\textbf{\(safeTitle)}")
+        source = replaceTopLevelCommandArg(in: source, command: "author", newArg: safeAuthor)
+
+        // 3. Bibliography style preset
+        let bibOption = config.bibliographyStyle.biblatexStyleOption
+        if let bibRegex = try? NSRegularExpression(pattern: #"\\usepackage(?:\[[^\]]*\])?\{biblatex\}"#) {
+            let ns = source as NSString
+            let replacement = "\\usepackage[style=\(bibOption),backend=bibtex]{biblatex}"
+            if bibRegex.firstMatch(in: source, range: NSRange(location: 0, length: ns.length)) != nil {
+                source = bibRegex.stringByReplacingMatches(
+                    in: source,
+                    range: NSRange(location: 0, length: ns.length),
+                    withTemplate: NSRegularExpression.escapedTemplate(for: replacement)
+                )
+            } else if let beginDocRange = source.range(of: "\\begin{document}") {
+                source.insert(contentsOf: "\\usepackage[style=\(bibOption),backend=bibtex]{biblatex}\n\\addbibresource{references.bib}\n", at: beginDocRange.lowerBound)
+            }
+        }
+
+        // 4. Double spacing
+        if config.doubleSpacing {
+            if !source.contains("\\usepackage{setspace}") {
+                if let beginDocRange = source.range(of: "\\begin{document}") {
+                    source.insert(contentsOf: "\\usepackage{setspace}\n", at: beginDocRange.lowerBound)
+                }
+            }
+            source = source.replacingOccurrences(of: "\\onehalfspacing", with: "\\doublespacing")
+            source = source.replacingOccurrences(of: "\\singlespacing", with: "\\doublespacing")
+            if !source.contains("\\doublespacing"), let beginDocRange = source.range(of: "\\begin{document}") {
+                source.insert(contentsOf: "\\doublespacing\n", at: beginDocRange.lowerBound)
+            }
+        } else {
+            source = source.replacingOccurrences(of: "\\doublespacing\n", with: "")
+            source = source.replacingOccurrences(of: "\\doublespacing", with: "")
+        }
+
+        // 5. Blind review line numbers
+        if config.anonymizedBlindReview {
+            source = SubmissionExportService.applyBlindReviewTransform(to: source)
+        }
+
+        return source
+    }
+
+    private static func replaceTopLevelCommandArg(in source: String, command: String, newArg: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "\\\\\(command)\\s*\\{") else {
+            return source
+        }
+        let ns = source as NSString
+        guard let match = regex.firstMatch(in: source, range: NSRange(location: 0, length: ns.length)),
+              let startIdx = Range(match.range, in: source)?.upperBound else {
+            return source
+        }
+        var depth = 1
+        var cursor = startIdx
+        while cursor < source.endIndex && depth > 0 {
+            let ch = source[cursor]
+            if ch == "\\" {
+                let next = source.index(after: cursor)
+                if next < source.endIndex {
+                    cursor = source.index(after: next)
+                    continue
+                }
+            } else if ch == "{" {
+                depth += 1
+            } else if ch == "}" {
+                depth -= 1
+                if depth == 0 {
+                    break
+                }
+            }
+            cursor = source.index(after: cursor)
+        }
+        guard depth == 0 else { return source }
+        var updated = source
+        updated.replaceSubrange(startIdx..<cursor, with: newArg)
+        return updated
+    }
 }

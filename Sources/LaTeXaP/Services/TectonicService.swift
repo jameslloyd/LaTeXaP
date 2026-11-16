@@ -13,10 +13,16 @@ public actor TectonicService {
     private let workspaceDir: URL
     private var currentProcess: Process?
 
-    public init() {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent("LaTeXaPStudioBuild", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        self.workspaceDir = base
+    public init(workspaceDirectory: URL? = nil) {
+        if let workspaceDirectory {
+            let base = workspaceDirectory.standardizedFileURL
+            try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            self.workspaceDir = base
+        } else {
+            let base = FileManager.default.temporaryDirectory.appendingPathComponent("LaTeXaPStudioBuild", isDirectory: true)
+            try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            self.workspaceDir = base
+        }
     }
 
     public static func locateTectonicBinary() -> String? {
@@ -55,7 +61,9 @@ public actor TectonicService {
     public func compile(
         source: String,
         documentDirectory: URL? = nil,
-        fontDirectories: [URL] = []
+        fontDirectories: [URL] = [],
+        additionalTextFiles: [String: String] = [:],
+        assetSearchDirectories: [URL] = []
     ) async -> CompilationResult {
         cancelRunningCompilation()
         let startTime = DispatchTime.now()
@@ -80,6 +88,8 @@ public actor TectonicService {
         try? FileManager.default.createDirectory(at: buildDir, withIntermediateDirectories: true)
 
         stageFontFiles(from: fontDirectories, into: buildDir)
+        stageAdditionalTextFiles(additionalTextFiles, into: buildDir)
+        stageFigureAssets(from: assetSearchDirectories, documentDirectory: documentDirectory, into: buildDir)
 
         let texFileURL = buildDir.appendingPathComponent("document.tex")
         let pdfFileURL = buildDir.appendingPathComponent("document.pdf")
@@ -108,19 +118,41 @@ public actor TectonicService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tectonicPath)
         process.currentDirectoryURL = documentDirectory ?? buildDir
-        process.arguments = [
+        var args = [
             "-X",
             "--color", "never",
             "compile",
             "--synctex",
             "--keep-logs",
-            "--outdir", buildDir.path,
-            texFileURL.path
+            "--outdir", buildDir.path
         ]
+        var seenSearchPaths = Set<String>()
+        var candidateSearchDirs: [URL] = []
+        if let docDir = documentDirectory {
+            candidateSearchDirs.append(docDir)
+        }
+        candidateSearchDirs.append(contentsOf: assetSearchDirectories)
+        for searchDir in candidateSearchDirs {
+            if let validPath = Self.validatedNonSymlinkSearchDirectoryPath(for: searchDir),
+               seenSearchPaths.insert(validPath).inserted {
+                args.append("-Z")
+                args.append("search-path=\(validPath)")
+            }
+        }
+        args.append(texFileURL.path)
+        process.arguments = args
 
         var env = ProcessInfo.processInfo.environment
         let extraPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "")"
+        let path = Self.validatedSearchDirectoryPath(for: buildDir)
+        if let path {
+            if let existingBib = env["BIBINPUTS"], !existingBib.isEmpty {
+                env["BIBINPUTS"] = "\(path):\(existingBib)"
+            } else {
+                env["BIBINPUTS"] = "\(path):"
+            }
+        }
         Self.injectFontEnvironment(fontDirectories: fontDirectories, into: &env)
         process.environment = env
 
@@ -169,6 +201,165 @@ public actor TectonicService {
             logOutput: combinedConsole,
             durationMs: durationMs
         )
+    }
+
+    private func stageAdditionalTextFiles(_ additionalTextFiles: [String: String], into buildDir: URL) {
+        let fm = FileManager.default
+        let allowedExtensions: Set<String> = ["bib", "sty", "cls", "tex", "bst", "cfg"]
+        let reservedNames: Set<String> = ["document.tex", "document.pdf", "document.log", "document.synctex.gz"]
+
+        // Remove stale references.bib staged in buildDir when caller didn't provide one
+        if additionalTextFiles["references.bib"] == nil {
+            let staleBib = buildDir.appendingPathComponent("references.bib")
+            if fm.fileExists(atPath: staleBib.path) {
+                try? fm.removeItem(at: staleBib)
+            }
+        }
+
+        for (rawName, content) in additionalTextFiles {
+            guard let validLeaf = Self.validatedTextFileLeaf(rawName, allowedExtensions: allowedExtensions),
+                  !reservedNames.contains(validLeaf.lowercased()) else {
+                continue
+            }
+            let destURL = buildDir.appendingPathComponent(validLeaf).standardizedFileURL
+            try? content.write(to: destURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func stageFigureAssets(
+        from assetSearchDirectories: [URL],
+        documentDirectory: URL?,
+        into buildDir: URL
+    ) {
+        let fm = FileManager.default
+        let allowedExtensions: Set<String> = ["png", "jpg", "jpeg", "pdf", "tiff", "tif", "eps", "svg"]
+        let buildFiguresDir = buildDir.appendingPathComponent("figures", isDirectory: true)
+        let buildFigLinkVals = try? buildFiguresDir.resourceValues(forKeys: [.isSymbolicLinkKey])
+        if buildFigLinkVals?.isSymbolicLink == true {
+            return
+        }
+
+        // Clean stale staged symlinks inside buildDir/figures
+        if let existing = try? fm.contentsOfDirectory(
+            at: buildFiguresDir,
+            includingPropertiesForKeys: [.isSymbolicLinkKey],
+            options: []
+        ) {
+            for item in existing {
+                let vals = try? item.resourceValues(forKeys: [.isSymbolicLinkKey])
+                if vals?.isSymbolicLink == true {
+                    try? fm.removeItem(at: item)
+                }
+            }
+        }
+
+        func isSafeNonSymlinkDirectory(_ url: URL, containedInside parent: URL? = nil) -> Bool {
+            let std = url.standardizedFileURL
+            let vals = try? std.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+            guard vals?.isSymbolicLink != true, vals?.isDirectory == true else {
+                return false
+            }
+            if let parent {
+                let resolvedParent = parent.standardizedFileURL.resolvingSymlinksInPath().path
+                let resolvedChild = std.resolvingSymlinksInPath().path
+                let prefix = resolvedParent.hasSuffix("/") ? resolvedParent : resolvedParent + "/"
+                guard resolvedChild.hasPrefix(prefix) else {
+                    return false
+                }
+            }
+            return true
+        }
+
+        var candidateDirs: [URL] = []
+        for dir in assetSearchDirectories where dir.isFileURL {
+            if isSafeNonSymlinkDirectory(dir) {
+                candidateDirs.append(dir)
+                let nested = dir.appendingPathComponent("figures", isDirectory: true)
+                if fm.fileExists(atPath: nested.path), isSafeNonSymlinkDirectory(nested, containedInside: dir) {
+                    candidateDirs.append(nested)
+                }
+            }
+        }
+        if let docDir = documentDirectory, docDir.isFileURL {
+            let docFigures = docDir.appendingPathComponent("figures", isDirectory: true)
+            if fm.fileExists(atPath: docFigures.path), isSafeNonSymlinkDirectory(docFigures, containedInside: docDir) {
+                candidateDirs.append(docFigures)
+            }
+        }
+
+        guard !candidateDirs.isEmpty else { return }
+        try? fm.createDirectory(at: buildFiguresDir, withIntermediateDirectories: true)
+
+        for dir in candidateDirs {
+            guard let files = try? fm.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: [.skipsHiddenFiles]
+            ) else {
+                continue
+            }
+            for file in files {
+                let ext = file.pathExtension.lowercased()
+                guard allowedExtensions.contains(ext) else { continue }
+                let linkVals = try? file.resourceValues(forKeys: [.isSymbolicLinkKey, .isRegularFileKey])
+                guard linkVals?.isSymbolicLink != true, linkVals?.isRegularFile == true else { continue }
+
+                let leaf = file.lastPathComponent
+                guard !leaf.contains("/"), !leaf.contains("\\"), !leaf.contains(".."), !leaf.contains("\0") else {
+                    continue
+                }
+                let destLink = buildFiguresDir.appendingPathComponent(leaf)
+                if fm.fileExists(atPath: destLink.path) {
+                    try? fm.removeItem(at: destLink)
+                }
+                try? fm.createSymbolicLink(at: destLink, withDestinationURL: file)
+            }
+        }
+    }
+
+    public static func validatedTextFileLeaf(_ rawName: String, allowedExtensions: Set<String> = ["bib", "sty", "cls", "tex", "bst", "cfg"]) -> String? {
+        guard !rawName.contains("/"),
+              !rawName.contains("\\"),
+              !rawName.contains(":"),
+              !rawName.contains("\0") else {
+            return nil
+        }
+        let hasControl = rawName.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        guard !hasControl else { return nil }
+        let leaf = (rawName as NSString).lastPathComponent
+        guard !leaf.isEmpty, leaf != ".", leaf != ".." else {
+            return nil
+        }
+        let ext = URL(fileURLWithPath: leaf).pathExtension.lowercased()
+        guard allowedExtensions.contains(ext) else { return nil }
+        return leaf
+    }
+
+    private static func validatedSearchDirectoryPath(for dir: URL) -> String? {
+        guard dir.isFileURL else { return nil }
+        let path = dir.standardizedFileURL.path
+        guard !path.isEmpty,
+              !path.contains(":"),
+              !path.contains("\r"),
+              !path.contains("\n"),
+              !path.contains("\0") else {
+            return nil
+        }
+        return path
+    }
+
+    private static func validatedNonSymlinkSearchDirectoryPath(for dir: URL) -> String? {
+        guard let path = validatedSearchDirectoryPath(for: dir) else { return nil }
+        let std = dir.standardizedFileURL
+        let vals = try? std.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+        guard vals?.isSymbolicLink != true, vals?.isDirectory == true else {
+            return nil
+        }
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: std.path),
+           (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+            return nil
+        }
+        return path
     }
 
     private func stageFontFiles(from fontDirectories: [URL], into buildDir: URL) {

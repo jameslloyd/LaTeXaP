@@ -26,12 +26,25 @@ enum SidebarTab: String, CaseIterable, Identifiable {
 private final class MainWorkspaceUIState: ObservableObject {
     @Published var showEditorFontPopover: Bool = false
     @Published var isSidebarFontDropTargeted: Bool = false
+    @Published var showPaperBudgetPopover: Bool = false
+    @Published var showSubmissionPreExportAlert: Bool = false
+    @Published var wizardInitialTemplateId: String? = nil
+    @Published var bibLibraryFilter: String = ""
+    @Published var bibPageLocator: String = ""
+    @Published var isBibDropTargeted: Bool = false
+    @Published var expandedRawDiagnosticIDs: Set<String> = []
 }
 
 public struct MainWorkspaceView: View {
     @ObservedObject var viewModel: DocumentViewModel
     @StateObject private var uiState = MainWorkspaceUIState()
     @FocusState private var isFontsToolbarFocused: Bool
+    @FocusState private var isVisualToolsToolbarFocused: Bool
+    @FocusState private var isCiteToolbarFocused: Bool
+    @FocusState private var isFigureToolbarFocused: Bool
+    @FocusState private var isBudgetPillFocused: Bool
+    @FocusState private var isWizardButtonFocused: Bool
+    @FocusState private var isBibLookupFieldFocused: Bool
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -48,6 +61,11 @@ public struct MainWorkspaceView: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 265, max: 340)
         } detail: {
             VStack(spacing: 0) {
+                if let exportMessage = viewModel.submissionExportMessage {
+                    submissionExportBanner(message: exportMessage)
+                    Divider()
+                }
+
                 HSplitView {
                     editorPane
                         .frame(minWidth: 360, idealWidth: 560, maxWidth: .infinity, maxHeight: .infinity)
@@ -59,7 +77,7 @@ public struct MainWorkspaceView: View {
                 if viewModel.showConsoleDrawer {
                     Divider()
                     DiagnosticsDrawerView(viewModel: viewModel)
-                        .frame(minHeight: 140, idealHeight: 190, maxHeight: 300)
+                        .frame(minHeight: 140, idealHeight: 195, maxHeight: 320)
                         .transition(.move(edge: .bottom))
                 }
 
@@ -135,7 +153,21 @@ public struct MainWorkspaceView: View {
                 } label: {
                     Label("Math & Tables", systemImage: "function")
                 }
-                .help("Open Visual Math Symbol Palette, Matrix Generator & CSV Table Builder")
+                .focused($isVisualToolsToolbarFocused)
+                .help("Open Visual Math Palette, Matrix Builder, Table Editor & Chart Builder")
+
+                Button {
+                    viewModel.showCitationPickerPopover.toggle()
+                } label: {
+                    Label("Cite", systemImage: "quote.bubble")
+                }
+                .focused($isCiteToolbarFocused)
+                .popover(isPresented: $viewModel.showCitationPickerPopover, arrowEdge: .bottom) {
+                    CitationPickerPopoverView(viewModel: viewModel)
+                }
+                .help("Open Quick Citation Picker (⇧⌘K)")
+                .accessibilityLabel("Cite")
+                .accessibilityHint("Opens the Quick Citation Picker popover")
 
                 Button {
                     viewModel.showFontManagerSheet = true
@@ -148,11 +180,15 @@ public struct MainWorkspaceView: View {
                 .accessibilityHint("Opens the Font Manager sheet")
 
                 Button {
-                    viewModel.importFigureViaPanel()
+                    viewModel.pendingDroppedFigureURL = nil
+                    viewModel.showFigureAssistantSheet = true
                 } label: {
                     Label("Insert Figure", systemImage: "photo.badge.plus")
                 }
-                .help("Import an image or PDF figure (or drag-and-drop into the editor)")
+                .focused($isFigureToolbarFocused)
+                .help("Open Figure Assistant to insert single or side-by-side figures (or drag-and-drop into the editor)")
+                .accessibilityLabel("Insert Figure")
+                .accessibilityHint("Opens the Figure Assistant sheet")
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -161,19 +197,42 @@ public struct MainWorkspaceView: View {
                 } label: {
                     Label("Diagnostics", systemImage: "exclamationmark.triangle")
                 }
-                .help("Toggle Live Diagnostics & TeX Log Drawer")
+                .help("Toggle Live Diagnostics, Pre-Flight & TeX Log Drawer")
 
-                Button {
-                    viewModel.exportPDF()
+                Menu {
+                    Button {
+                        viewModel.exportPDF()
+                    } label: {
+                        Label("Export PDF...", systemImage: "doc.richtext")
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                    Button {
+                        triggerSubmissionExportFlow()
+                    } label: {
+                        Label("Export Submission Bundle (.zip)...", systemImage: "archivebox")
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift, .option])
                 } label: {
-                    Label("Export PDF", systemImage: "arrow.up.doc.fill")
+                    if viewModel.isExportingSubmissionBundle {
+                        HStack(spacing: 5) {
+                            ProgressView().controlSize(.small)
+                            Text("Exporting...")
+                        }
+                    } else {
+                        Label("Export", systemImage: "arrow.up.doc.fill")
+                    }
+                } primaryAction: {
+                    viewModel.exportPDF()
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-                .help("Export compiled PDF document (⇧⌘E)")
+                .help("Export PDF (⇧⌘E) or Submission Bundle .zip (⌥⇧⌘E)")
+                .accessibilityLabel("Export")
+                .accessibilityHint("Exports PDF or packages a clean submission zip bundle")
             }
         }
-        .sheet(isPresented: $viewModel.showVisualToolsSheet) {
+        .sheet(isPresented: $viewModel.showVisualToolsSheet, onDismiss: {
+            isVisualToolsToolbarFocused = true
+        }) {
             VisualToolsSheetView(viewModel: viewModel)
         }
         .sheet(isPresented: $viewModel.showFontManagerSheet, onDismiss: {
@@ -181,6 +240,101 @@ public struct MainWorkspaceView: View {
         }) {
             FontManagerView(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.showPaperWizardSheet, onDismiss: {
+            uiState.wizardInitialTemplateId = nil
+            isWizardButtonFocused = true
+        }) {
+            PaperWizardSheetView(viewModel: viewModel, initialTemplateId: uiState.wizardInitialTemplateId)
+        }
+        .sheet(isPresented: $viewModel.showFigureAssistantSheet, onDismiss: {
+            viewModel.pendingDroppedFigureURL = nil
+            isFigureToolbarFocused = true
+        }) {
+            FigureAssistantSheetView(viewModel: viewModel)
+        }
+        .alert("Pre-Flight Checks Found Issues", isPresented: $uiState.showSubmissionPreExportAlert) {
+            Button("Review Pre-Flight") {
+                viewModel.selectedDiagnosticTab = 1
+                viewModel.showConsoleDrawer = true
+            }
+            Button("Export Anyway") {
+                viewModel.exportSubmissionBundle(stripComments: false, anonymize: false)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let blockers = viewModel.preflightReport.items.filter { $0.severity == .blocker }.count
+            let warnings = viewModel.preflightReport.items.filter { $0.severity == .warning }.count
+            Text("Pre-Flight detected \(blockers) blocker(s) and \(warnings) warning(s) that could cause grading or compilation failures. Review Pre-Flight before packaging or export anyway?")
+        }
+        .onChange(of: viewModel.showCitationPickerPopover) { _, isShown in
+            if !isShown {
+                isCiteToolbarFocused = true
+            }
+        }
+        .onChange(of: uiState.showPaperBudgetPopover) { _, isShown in
+            if !isShown {
+                isBudgetPillFocused = true
+            }
+        }
+        .onChange(of: viewModel.submissionExportMessage) { _, newMessage in
+            if let newMessage, !newMessage.isEmpty {
+                NSAccessibility.post(
+                    element: NSApp as Any,
+                    notification: .announcementRequested,
+                    userInfo: [.announcement: newMessage]
+                )
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .latexapRequestSubmissionExport)) { _ in
+            triggerSubmissionExportFlow()
+        }
+    }
+
+    private func triggerSubmissionExportFlow() {
+        let issues = viewModel.preflightReport.items.filter { $0.severity != .pass }
+        if !viewModel.preflightReport.isSubmissionReady || !issues.isEmpty {
+            uiState.showSubmissionPreExportAlert = true
+        } else {
+            viewModel.exportSubmissionBundle(stripComments: false, anonymize: false)
+        }
+    }
+
+    @ViewBuilder
+    private func submissionExportBanner(message: String) -> some View {
+        let isError = message.localizedCaseInsensitiveContains("failed") || message.localizedCaseInsensitiveContains("error")
+        HStack(spacing: 8) {
+            Image(systemName: isError ? "xmark.octagon.fill" : "checkmark.seal.fill")
+                .foregroundStyle(isError ? .red : .green)
+            Text(message)
+                .font(.caption.weight(.medium))
+                .lineLimit(2)
+            Spacer()
+            if !isError, let zipURL = viewModel.lastExportedZipURL {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([zipURL])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                .controlSize(.small)
+                .accessibilityLabel("Reveal submission zip in Finder")
+            }
+            if isError {
+                Button("Review Pre-Flight") {
+                    viewModel.selectedDiagnosticTab = 1
+                    viewModel.showConsoleDrawer = true
+                }
+                .controlSize(.small)
+            }
+            Button("Dismiss") {
+                viewModel.submissionExportMessage = nil
+                viewModel.lastExportedZipURL = nil
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(isError ? Color.red.opacity(0.10) : Color.green.opacity(0.10))
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: - Sidebar
@@ -545,104 +699,378 @@ public struct MainWorkspaceView: View {
     }
 
     private var bibliographyTabView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("FETCH BY DOI OR ARXIV ID")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
+        let filterText = uiState.bibLibraryFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filteredEntries = viewModel.bibEntries.filter { entry in
+            filterText.isEmpty ||
+            entry.key.localizedCaseInsensitiveContains(filterText) ||
+            entry.title.localizedCaseInsensitiveContains(filterText) ||
+            entry.author.localizedCaseInsensitiveContains(filterText) ||
+            entry.year.localizedCaseInsensitiveContains(filterText)
+        }
+        let filteredLabels = viewModel.documentLabels.filter { item in
+            filterText.isEmpty ||
+            item.label.localizedCaseInsensitiveContains(filterText) ||
+            item.contextPreview.localizedCaseInsensitiveContains(filterText)
+        }
+        let uncitedKeys = Set(viewModel.preflightReport.uncitedBibKeys)
+        let locator: String? = {
+            let trimmed = uiState.bibPageLocator.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }()
 
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    TextField("e.g. 10.1145/... or 2305.12345", text: $viewModel.bibLookupQuery)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit {
-                            viewModel.fetchAndAppendBibEntry()
-                        }
-
-                    Button {
-                        viewModel.fetchAndAppendBibEntry()
-                    } label: {
-                        if viewModel.isFetchingBib {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.down.doc.fill")
+                    Picker(
+                        "Style",
+                        selection: Binding(
+                            get: { viewModel.selectedBibliographyStyle },
+                            set: { viewModel.applyBibliographyStyle($0) }
+                        )
+                    ) {
+                        ForEach(BibliographyStylePreset.allCases) { style in
+                            Text(style.displayName).tag(style)
                         }
                     }
-                    .disabled(viewModel.bibLookupQuery.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isFetchingBib)
-                    .help("Fetch BibTeX entry from DOI or arXiv and append to bibliography")
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .accessibilityLabel("Bibliography formatting style")
+
+                    Spacer()
+
+                    Button {
+                        viewModel.importBibFileViaPanel()
+                    } label: {
+                        Label("Import .bib", systemImage: "doc.badge.plus")
+                            .font(.caption)
+                    }
+                    .controlSize(.small)
+                    .accessibilityLabel("Import BibTeX file")
+                    .accessibilityHint("Choose a .bib file to merge into your bibliography")
+                }
+
+                Text("SMART CITATION LOOKUP")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+
+                HStack(spacing: 6) {
+                    TextField("DOI, arXiv ID, ISBN, or Paper Title...", text: $viewModel.bibLookupQuery)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isBibLookupFieldFocused)
+                        .onSubmit {
+                            viewModel.searchCrossRefCitations()
+                        }
+                        .accessibilityLabel("Citation lookup query")
+                        .accessibilityHint("Enter a DOI, arXiv ID, ISBN, or paper title and press Return")
+
+                    Button {
+                        viewModel.searchCrossRefCitations()
+                    } label: {
+                        if viewModel.isSearchingCrossRef || viewModel.isFetchingBib {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "magnifyingglass")
+                        }
+                    }
+                    .disabled(
+                        viewModel.bibLookupQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                        viewModel.isSearchingCrossRef ||
+                        viewModel.isFetchingBib
+                    )
+                    .help("Search CrossRef, arXiv, or ISBN and fetch BibTeX metadata")
+                    .accessibilityLabel("Search citations")
                 }
 
                 if let err = viewModel.bibLookupError {
-                    Text(err)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                        Text(err)
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button {
+                            viewModel.bibLookupError = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Dismiss citation error")
+                    }
+                    .padding(6)
+                    .background(Color.red.opacity(0.10))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
+                if !viewModel.bibSearchResults.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("LOOKUP MATCHES (\(viewModel.bibSearchResults.count))")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Clear") {
+                                viewModel.bibSearchResults = []
+                            }
+                            .font(.caption2)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+
+                        ForEach(Array(viewModel.bibSearchResults.prefix(5))) { match in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(match.title)
+                                    .font(.caption.weight(.semibold))
+                                    .lineLimit(2)
+                                Text([match.author, match.year, match.venue].filter { !$0.isEmpty }.joined(separator: " • "))
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                HStack(spacing: 6) {
+                                    Button("+ Add") {
+                                        viewModel.importBibEntry(match, intoBibFile: true)
+                                    }
+                                    .controlSize(.mini)
+
+                                    Button("+ Cite") {
+                                        viewModel.importBibEntry(match, intoBibFile: true)
+                                        viewModel.insertFormattedCitation(
+                                            match,
+                                            style: viewModel.selectedCitationStyle,
+                                            pageLocator: locator
+                                        )
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.mini)
+                                    Spacer()
+                                }
+                            }
+                            .padding(6)
+                            .background(Color(NSColor.textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
                 }
             }
             .padding(10)
 
             Divider()
 
-            Text("CITATIONS (\(viewModel.bibEntries.count)) & LABELS (\(viewModel.documentLabels.count))")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-
-            List {
-                if !viewModel.bibEntries.isEmpty {
-                    Section("Bibliography Keys (\\cite{...})") {
-                        ForEach(viewModel.bibEntries) { entry in
-                            VStack(alignment: .leading, spacing: 3) {
-                                HStack {
-                                    Text(entry.key)
-                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(.pink)
-                                    if !entry.year.isEmpty {
-                                        Text(entry.year)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("Cite") {
-                                        viewModel.insertInlineText("\\cite{\(entry.key)}")
-                                    }
-                                    .controlSize(.mini)
-                                }
-                                Text(entry.title)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-                            .padding(.vertical, 2)
+            VStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease.circle")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                    TextField("Filter saved citations & labels...", text: $uiState.bibLibraryFilter)
+                        .textFieldStyle(.plain)
+                        .font(.caption)
+                        .accessibilityLabel("Filter saved citations and labels")
+                    if !uiState.bibLibraryFilter.isEmpty {
+                        Button {
+                            uiState.bibLibraryFilter = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Clear filter")
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color(NSColor.textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                if !viewModel.documentLabels.isEmpty {
-                    Section("Cross-Reference Labels (\\ref{...})") {
-                        ForEach(viewModel.documentLabels) { item in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.label)
-                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(.cyan)
-                                    Text("Line \(item.line) • \(item.contextPreview)")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Button("\\ref") {
-                                    viewModel.insertInlineText("\\ref{\(item.label)}")
-                                }
-                                .controlSize(.mini)
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    }
+                HStack(spacing: 6) {
+                    Text("Locator:")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    TextField("e.g. p. 12", text: $uiState.bibPageLocator)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.mini)
+                        .accessibilityLabel("Optional citation page locator")
                 }
             }
-            .listStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if viewModel.bibEntries.isEmpty && viewModel.documentLabels.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("No Citations Yet", systemImage: "books.vertical")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(uiState.isBibDropTargeted ? Color.accentColor : Color.primary)
+                    Text("Drop a .bib file from Zotero/Scholar here, click Import .bib, or search by DOI, arXiv, or title above.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(
+                            uiState.isBibDropTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
+                            style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])
+                        )
+                )
+                .padding(10)
+                Spacer()
+            } else {
+                List {
+                    if !filteredEntries.isEmpty {
+                        Section("Bibliography Entries (\(filteredEntries.count))") {
+                            ForEach(filteredEntries) { entry in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 6) {
+                                        Text(entry.key)
+                                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(.pink)
+                                        if !entry.year.isEmpty {
+                                            Text(entry.year)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        if uncitedKeys.contains(entry.key) {
+                                            Label("Uncited", systemImage: "exclamationmark.circle.fill")
+                                                .font(.system(size: 9.5, weight: .semibold))
+                                                .padding(.horizontal, 5)
+                                                .padding(.vertical, 1)
+                                                .background(Color.orange.opacity(0.16))
+                                                .foregroundStyle(.orange)
+                                                .clipShape(Capsule())
+                                        }
+                                        Spacer()
+                                    }
+                                    Text(entry.title)
+                                        .font(.caption.weight(.medium))
+                                        .lineLimit(2)
+                                    if !entry.author.isEmpty {
+                                        Text(entry.author)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    HStack(spacing: 5) {
+                                        Button("\\cite") {
+                                            viewModel.insertFormattedCitation(entry, style: .cite, pageLocator: locator)
+                                        }
+                                        .controlSize(.mini)
+                                        .accessibilityLabel("Insert cite command for \(entry.key)")
+
+                                        Button("\\parencite") {
+                                            viewModel.insertFormattedCitation(entry, style: .parencite, pageLocator: locator)
+                                        }
+                                        .controlSize(.mini)
+                                        .accessibilityLabel("Insert parencite command for \(entry.key)")
+
+                                        Button("\\textcite") {
+                                            viewModel.insertFormattedCitation(entry, style: .textcite, pageLocator: locator)
+                                        }
+                                        .controlSize(.mini)
+                                        .accessibilityLabel("Insert textcite command for \(entry.key)")
+                                    }
+                                }
+                                .padding(.vertical, 3)
+                            }
+                        }
+                    }
+
+                    if !filteredLabels.isEmpty {
+                        Section("Cross-Reference Labels (\(filteredLabels.count))") {
+                            ForEach(filteredLabels) { item in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.label)
+                                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                            .foregroundStyle(.cyan)
+                                        Text("Line \(item.line) • \(item.contextPreview)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    HStack(spacing: 4) {
+                                        Button("\\ref") {
+                                            viewModel.insertTextAtCaret("\\ref{\(item.label)}")
+                                        }
+                                        .controlSize(.mini)
+                                        .accessibilityLabel("Insert ref to \(item.label)")
+
+                                        Button("\\cref") {
+                                            viewModel.insertTextAtCaret("\\cref{\(item.label)}")
+                                        }
+                                        .controlSize(.mini)
+                                        .accessibilityLabel("Insert cleveref cref to \(item.label)")
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
         }
+        .onDrop(of: [.fileURL], isTargeted: $uiState.isBibDropTargeted, perform: handleSidebarBibDrop(providers:))
+        .onChange(of: viewModel.bibSearchResults) { _, results in
+            if !results.isEmpty {
+                NSAccessibility.post(
+                    element: NSApp as Any,
+                    notification: .announcementRequested,
+                    userInfo: [.announcement: "\(results.count) citation lookup results found"]
+                )
+            }
+        }
+        .onChange(of: viewModel.bibLookupError) { _, error in
+            if let error, !error.isEmpty {
+                NSAccessibility.post(
+                    element: NSApp as Any,
+                    notification: .announcementRequested,
+                    userInfo: [.announcement: "Citation lookup failed: \(error)"]
+                )
+            }
+        }
+    }
+
+    private func handleSidebarBibDrop(providers: [NSItemProvider]) -> Bool {
+        let lock = NSLock()
+        var droppedBibURL: URL?
+        let group = DispatchGroup()
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                let resolvedURL: URL?
+                if let data = item as? Data,
+                   let url = URL(dataRepresentation: data, relativeTo: nil),
+                   url.isFileURL {
+                    resolvedURL = url
+                } else if let url = item as? URL, url.isFileURL {
+                    resolvedURL = url
+                } else {
+                    resolvedURL = nil
+                }
+
+                if let url = resolvedURL, url.pathExtension.lowercased() == "bib" {
+                    lock.lock()
+                    if droppedBibURL == nil {
+                        droppedBibURL = url
+                    }
+                    lock.unlock()
+                }
+            }
+        }
+        group.notify(queue: .main) {
+            if let url = droppedBibURL {
+                viewModel.handleDroppedBibFileURL(url)
+            }
+        }
+        return true
     }
 
     private var snippetsTabView: some View {
@@ -683,31 +1111,77 @@ public struct MainWorkspaceView: View {
     }
 
     private var templatesTabView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("STARTER TEMPLATES")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+        let orderedCategories = ["Academic Papers", "STEM & Theses", "LaTeX3 Core"]
+        let extraCategories = Array(Set(LaTeXCatalog.templates.map(\.category)))
+            .filter { !orderedCategories.contains($0) }
+            .sorted()
+        let categories = orderedCategories + extraCategories
 
-            List(LaTeXCatalog.templates) { template in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Image(systemName: template.icon)
-                            .foregroundStyle(Color.accentColor)
-                        Text(template.name)
-                            .font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                    }
-                    Text(template.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Load Template") {
-                        viewModel.loadTemplate(template)
-                    }
-                    .controlSize(.small)
+        return VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("ACADEMIC & LATEX3 TEMPLATES")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+
+                Button {
+                    uiState.wizardInitialTemplateId = nil
+                    viewModel.showPaperWizardSheet = true
+                } label: {
+                    Label("New with Setup Wizard...", systemImage: "wand.and.stars")
+                        .frame(maxWidth: .infinity)
                 }
-                .padding(.vertical, 5)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .focused($isWizardButtonFocused)
+                .accessibilityLabel("New with Setup Wizard")
+                .accessibilityHint("Opens the Academic Paper Setup Wizard (Shift-Command-N)")
+            }
+            .padding(10)
+
+            Divider()
+
+            List {
+                ForEach(categories, id: \.self) { category in
+                    let items = LaTeXCatalog.templates.filter { $0.category == category }
+                    if !items.isEmpty {
+                        Section {
+                            ForEach(items) { template in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Image(systemName: template.icon)
+                                            .foregroundStyle(Color.accentColor)
+                                        Text(template.name)
+                                            .font(.system(size: 12.5, weight: .semibold))
+                                        Spacer()
+                                    }
+                                    Text(template.subtitle)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    HStack(spacing: 6) {
+                                        Button("Load Starter") {
+                                            viewModel.loadTemplate(template)
+                                        }
+                                        .controlSize(.mini)
+
+                                        Button("Customize...") {
+                                            uiState.wizardInitialTemplateId = template.id
+                                            viewModel.showPaperWizardSheet = true
+                                        }
+                                        .controlSize(.mini)
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        } header: {
+                            Text(category)
+                                .font(.caption.weight(.semibold))
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                    }
+                }
             }
             .listStyle(.plain)
         }
@@ -722,10 +1196,40 @@ public struct MainWorkspaceView: View {
                     .foregroundStyle(.secondary)
                 Text(viewModel.currentFileURL?.lastPathComponent ?? "Untitled.tex")
                     .font(.system(size: 12, weight: .semibold))
-                Text("• LaTeX3 / expl3")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if !viewModel.rubricTargets.studentModeHideExpl3 {
+                    Text("• LaTeX3 / expl3")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
+
+                Toggle(isOn: $viewModel.proseSpellCheckEnabled) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "textformat.abc")
+                        Text("Spellcheck")
+                        if viewModel.proseSpellCheckEnabled && !viewModel.spellingIssues.isEmpty {
+                            Text("\(viewModel.spellingIssues.count)")
+                                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(Color.orange.opacity(0.2))
+                                .foregroundStyle(.orange)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .font(.system(size: 10.5, weight: .medium))
+                }
+                .toggleStyle(.button)
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Toggle LaTeX-Aware Prose Spellcheck (⌥⌘;)")
+                .accessibilityLabel("Prose Spellcheck")
+                .accessibilityValue(
+                    viewModel.proseSpellCheckEnabled
+                    ? "On, \(viewModel.spellingIssues.count) issues"
+                    : "Off"
+                )
+                .accessibilityHint("Checks prose spelling while ignoring TeX commands and math")
 
                 Button {
                     uiState.showEditorFontPopover.toggle()
@@ -774,16 +1278,29 @@ public struct MainWorkspaceView: View {
                 text: $viewModel.sourceText,
                 cursorLine: $viewModel.cursorLine,
                 jumpToLineRequest: $viewModel.jumpToLineRequest,
+                pendingInsertion: $viewModel.pendingEditorInsertion,
                 diagnostics: viewModel.diagnostics,
                 fontSize: viewModel.editorFontSize,
                 fontName: viewModel.editorFontName,
                 customFonts: viewModel.customFonts,
+                bibEntries: viewModel.bibEntries,
+                spellingIssues: viewModel.spellingIssues,
+                spellCheckEnabled: viewModel.proseSpellCheckEnabled,
                 lightBackground: viewModel.useLightEditorBackground,
                 onDropImageFile: { droppedURL in
                     viewModel.handleDroppedImageURL(droppedURL)
                 },
                 onDropFontFiles: { droppedFontURLs in
                     viewModel.importCustomFonts(urls: droppedFontURLs)
+                },
+                onDropBibFile: { droppedBibURL in
+                    viewModel.handleDroppedBibFileURL(droppedBibURL)
+                },
+                onApplySpellingFix: { issue, replacement in
+                    viewModel.applySpellingSuggestion(issue, replacement: replacement)
+                },
+                onIgnoreSpellingWord: { word in
+                    viewModel.ignoreSpellingWord(word)
                 }
             )
         }
@@ -904,8 +1421,10 @@ public struct MainWorkspaceView: View {
     private var statusBar: some View {
         let errorCount = viewModel.diagnostics.filter { $0.severity == .error }.count
         let warningCount = viewModel.diagnostics.filter { $0.severity == .warning }.count
+        let preflightIssueCount = viewModel.preflightReport.items.filter { $0.severity != .pass }.count
+        let budgetDisplay = budgetPillDisplay()
 
-        return HStack(spacing: 16) {
+        return HStack(spacing: 14) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     viewModel.showConsoleDrawer.toggle()
@@ -920,6 +1439,25 @@ public struct MainWorkspaceView: View {
                 .font(.system(size: 11.5, weight: .medium))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("\(errorCount) errors, \(warningCount) warnings")
+            .accessibilityHint("Toggles the diagnostics drawer")
+
+            Button {
+                viewModel.selectedDiagnosticTab = 1
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    viewModel.showConsoleDrawer = true
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: preflightIssueCount == 0 ? "checkmark.seal.fill" : "checklist")
+                        .foregroundStyle(preflightIssueCount == 0 ? .green : .orange)
+                    Text(preflightIssueCount == 0 ? "Pre-Flight Ready" : "Pre-Flight: \(preflightIssueCount)")
+                }
+                .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(preflightIssueCount == 0 ? "Pre-Flight Ready" : "Pre-Flight \(preflightIssueCount) issues")
+            .accessibilityHint("Opens the Academic Pre-Flight checklist tab")
 
             if let firstError = viewModel.diagnostics.first(where: { $0.severity == .error }) {
                 Text(firstError.message)
@@ -930,15 +1468,46 @@ public struct MainWorkspaceView: View {
 
             Spacer()
 
-            HStack(spacing: 12) {
-                Text("\(viewModel.documentStats.wordCount) words")
+            HStack(spacing: 10) {
+                Button {
+                    uiState.showPaperBudgetPopover.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: budgetDisplay.icon)
+                            .foregroundStyle(budgetDisplay.color)
+                        Text(budgetDisplay.label)
+                            .foregroundStyle(budgetDisplay.isWarning ? budgetDisplay.color : .primary)
+                    }
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(budgetDisplay.color.opacity(budgetDisplay.isWarning ? 0.14 : 0.08))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .focused($isBudgetPillFocused)
+                .popover(isPresented: $uiState.showPaperBudgetPopover, arrowEdge: .top) {
+                    RubricTargetsPopoverView(viewModel: viewModel)
+                }
+                .help("View detailed paper word counts, abstract budget, and rubric targets")
+                .accessibilityLabel("Word and page budget")
+                .accessibilityValue(budgetDisplay.accessibilityValue)
+                .accessibilityHint("Opens paper breakdown and rubric target settings")
+
                 Text("•")
+                    .foregroundStyle(.secondary)
                 Text("\(viewModel.documentStats.mathCount) math")
-                Text("•")
-                Text("\(viewModel.documentStats.expl3SymbolCount) expl3")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                if !viewModel.rubricTargets.studentModeHideExpl3 {
+                    Text("•")
+                        .foregroundStyle(.secondary)
+                    Text("\(viewModel.documentStats.expl3SymbolCount) expl3")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
             }
-            .font(.system(size: 11, design: .monospaced))
-            .foregroundStyle(.secondary)
 
             Text("|")
                 .foregroundStyle(.quaternary)
@@ -952,6 +1521,68 @@ public struct MainWorkspaceView: View {
         .background(Color(NSColor.windowBackgroundColor))
     }
 
+    private func budgetPillDisplay() -> (
+        label: String,
+        icon: String,
+        color: Color,
+        isWarning: Bool,
+        accessibilityValue: String
+    ) {
+        let proseWords = viewModel.academicStats.proseWordCount
+        let pages = max(viewModel.academicStats.pageCount, 1)
+        let targetWords = viewModel.rubricTargets.targetProseWords
+        let maxPages = viewModel.rubricTargets.maxPageCount
+
+        let wordPart: String
+        if let targetWords, targetWords > 0 {
+            wordPart = "\(proseWords) / \(targetWords) words"
+        } else {
+            wordPart = "\(proseWords) words"
+        }
+
+        let pagePart: String
+        if let maxPages, maxPages > 0 {
+            pagePart = "\(pages)/\(maxPages)p"
+        } else {
+            pagePart = "\(pages)p"
+        }
+
+        var isOver = false
+        var isNear = false
+        var statusSummary = "on track"
+
+        if let targetWords, targetWords > 0 {
+            let ratio = Double(proseWords) / Double(targetWords)
+            if proseWords > targetWords {
+                isOver = true
+                statusSummary = "over word limit"
+            } else if ratio >= 0.90 {
+                isNear = true
+                statusSummary = "near word limit"
+            }
+        }
+        if let maxPages, maxPages > 0, pages > maxPages {
+            isOver = true
+            statusSummary = "over page limit"
+        }
+
+        let icon: String
+        let color: Color
+        if isOver {
+            icon = "exclamationmark.octagon.fill"
+            color = .red
+        } else if isNear {
+            icon = "exclamationmark.triangle.fill"
+            color = .orange
+        } else {
+            icon = "doc.text"
+            color = .secondary
+        }
+
+        let accessibilityValue = "\(wordPart), \(pagePart), \(statusSummary)"
+        return ("\(wordPart) • \(pagePart)", icon, color, isOver || isNear, accessibilityValue)
+    }
+
     private func badgeColor(for badge: String) -> Color {
         switch badge {
         case "expl3": return .purple
@@ -962,8 +1593,15 @@ public struct MainWorkspaceView: View {
     }
 }
 
+@MainActor
+private final class DiagnosticsDrawerUIState: ObservableObject {
+    @Published var expandedRawIDs: Set<String> = []
+}
+
 public struct DiagnosticsDrawerView: View {
     @ObservedObject var viewModel: DocumentViewModel
+    @StateObject private var uiState = DiagnosticsDrawerUIState()
+    @FocusState private var isDiagnosticsListFocused: Bool
 
     public var body: some View {
         let contextAnalysis = ContextSuggestionsEngine.analyze(
@@ -971,18 +1609,20 @@ public struct DiagnosticsDrawerView: View {
             cursorLine: viewModel.cursorLine,
             diagnostics: viewModel.diagnostics
         )
+        let preflightIssueCount = viewModel.preflightReport.items.filter { $0.severity != .pass }.count
 
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Picker("", selection: $viewModel.selectedDiagnosticTab) {
                     Text("Diagnostics (\(viewModel.diagnostics.count))").tag(0)
-                    Text("Full TeX Transcript").tag(1)
-                    Text("Context Suggestions (\(contextAnalysis.items.count))").tag(2)
+                    Text("Pre-Flight (\(preflightIssueCount))").tag(1)
+                    Text("Full TeX Transcript").tag(2)
+                    Text("Context Suggestions (\(contextAnalysis.items.count))").tag(3)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 480)
+                .frame(maxWidth: 620)
 
-                if viewModel.selectedDiagnosticTab == 2 {
+                if viewModel.selectedDiagnosticTab == 3 {
                     Label(contextAnalysis.contextBadge, systemImage: "sparkles")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(Color.accentColor)
@@ -1001,6 +1641,7 @@ public struct DiagnosticsDrawerView: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Close diagnostics drawer")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -1009,52 +1650,10 @@ public struct DiagnosticsDrawerView: View {
             Divider()
 
             if viewModel.selectedDiagnosticTab == 0 {
-                if viewModel.diagnostics.isEmpty {
-                    HStack {
-                        Spacer()
-                        Label("No errors or warnings reported by Tectonic.", systemImage: "checkmark.seal.fill")
-                            .foregroundStyle(.secondary)
-                            .padding()
-                        Spacer()
-                    }
-                    .frame(maxHeight: .infinity)
-                } else {
-                    List(viewModel.diagnostics) { diag in
-                        Button {
-                            if let line = diag.line {
-                                viewModel.jumpToLineRequest = line
-                            }
-                        } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Image(systemName: iconName(for: diag.severity))
-                                    .foregroundStyle(color(for: diag.severity))
-
-                                if let line = diag.line {
-                                    Text("Line \(line)")
-                                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                                        .frame(width: 64, alignment: .leading)
-                                } else {
-                                    Text("Global")
-                                        .font(.system(size: 11.5, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 64, alignment: .leading)
-                                }
-
-                                Text(diag.message)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(.primary)
-                                    .multilineTextAlignment(.leading)
-
-                                Spacer()
-                            }
-                            .padding(.vertical, 2)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .listStyle(.plain)
-                }
+                diagnosticsTabContent
             } else if viewModel.selectedDiagnosticTab == 1 {
+                PreflightChecklistView(viewModel: viewModel)
+            } else if viewModel.selectedDiagnosticTab == 2 {
                 ScrollView {
                     Text(viewModel.consoleLog.isEmpty ? "No transcript output yet." : viewModel.consoleLog)
                         .font(.system(size: 11.5, design: .monospaced))
@@ -1103,6 +1702,140 @@ public struct DiagnosticsDrawerView: View {
                 }
                 .listStyle(.plain)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var diagnosticsTabContent: some View {
+        if viewModel.diagnostics.isEmpty && viewModel.demystifiedDiagnostics.isEmpty {
+            HStack {
+                Spacer()
+                Label("No errors or warnings reported by Tectonic.", systemImage: "checkmark.seal.fill")
+                    .foregroundStyle(.secondary)
+                    .padding()
+                Spacer()
+            }
+            .frame(maxHeight: .infinity)
+            .focused($isDiagnosticsListFocused)
+        } else if !viewModel.demystifiedDiagnostics.isEmpty {
+            List(viewModel.demystifiedDiagnostics) { item in
+                let isExpanded = uiState.expandedRawIDs.contains(item.id)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Image(systemName: iconName(for: item.severity))
+                            .foregroundStyle(color(for: item.severity))
+
+                        if let line = item.line {
+                            Button("Line \(line)") {
+                                viewModel.jumpToLineRequest = line
+                                viewModel.cursorLine = line
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .accessibilityLabel("Jump to line \(line)")
+                        } else {
+                            Text("Global")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 56, alignment: .leading)
+                        }
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(item.shortTitle)
+                                .font(.system(size: 12.5, weight: .semibold))
+                            Text(item.explanation)
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Spacer()
+
+                        HStack(spacing: 6) {
+                            if !item.rawMessage.isEmpty {
+                                Button(isExpanded ? "Hide Log" : "Raw Log") {
+                                    if isExpanded {
+                                        uiState.expandedRawIDs.remove(item.id)
+                                    } else {
+                                        uiState.expandedRawIDs.insert(item.id)
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                                .font(.caption2)
+                                .accessibilityLabel(isExpanded ? "Hide raw compiler message" : "Show raw compiler message")
+                            }
+
+                            if let fixTitle = item.fixButtonTitle, let op = item.fixOperation {
+                                Button(fixTitle) {
+                                    viewModel.applyAcademicFix(op)
+                                    isDiagnosticsListFocused = true
+                                    let lineSuffix = item.line.map { " on line \($0)" } ?? ""
+                                    NSAccessibility.post(
+                                        element: NSApp as Any,
+                                        notification: .announcementRequested,
+                                        userInfo: [.announcement: "Applied fix: \(fixTitle)\(lineSuffix)"]
+                                    )
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.small)
+                                .accessibilityLabel("Auto-fix: \(fixTitle)")
+                                .accessibilityHint("Applies deterministic LaTeX fix and recompiles")
+                            }
+                        }
+                    }
+
+                    if isExpanded && !item.rawMessage.isEmpty {
+                        Text(item.rawMessage)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(NSColor.textBackgroundColor))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .textSelection(.enabled)
+                    }
+                }
+                .padding(.vertical, 3)
+                .accessibilityElement(children: .contain)
+            }
+            .listStyle(.plain)
+            .focused($isDiagnosticsListFocused)
+        } else {
+            List(viewModel.diagnostics) { diag in
+                Button {
+                    if let line = diag.line {
+                        viewModel.jumpToLineRequest = line
+                    }
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Image(systemName: iconName(for: diag.severity))
+                            .foregroundStyle(color(for: diag.severity))
+
+                        if let line = diag.line {
+                            Text("Line \(line)")
+                                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                                .frame(width: 64, alignment: .leading)
+                        } else {
+                            Text("Global")
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 64, alignment: .leading)
+                        }
+
+                        Text(diag.message)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(.primary)
+                            .multilineTextAlignment(.leading)
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .listStyle(.plain)
         }
     }
 

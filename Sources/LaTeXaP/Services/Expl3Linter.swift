@@ -166,4 +166,115 @@ public enum Expl3Linter {
             expl3SymbolCount: expl3Count
         )
     }
+
+    /// Computes academic writing budget metrics: prose-only body word count (excluding preamble,
+    /// tables, math, code, and bibliography), abstract word count, references, figures, tables, and reading time.
+    public static func computeAcademicStatistics(
+        source: String,
+        bibEntries: [BibEntry] = [],
+        pageCount: Int = 0
+    ) -> AcademicDocumentStats {
+        guard !source.isEmpty else {
+            return AcademicDocumentStats(referenceCount: bibEntries.count, pageCount: max(0, pageCount))
+        }
+
+        // 1. Body extraction
+        var bodySlice: String
+        if let beginRange = source.range(of: "\\begin{document}") {
+            let afterBegin = source[beginRange.upperBound...]
+            if let endRange = afterBegin.range(of: "\\end{document}") {
+                bodySlice = String(afterBegin[..<endRange.lowerBound])
+            } else {
+                bodySlice = String(afterBegin)
+            }
+        } else {
+            bodySlice = source
+        }
+
+        // Strip comments first for structural counts
+        let uncommentedBody = stripMatches(#"(?<!\\)%.*$"#, from: bodySlice, options: [.anchorsMatchLines])
+
+        // 2. Abstract word count
+        var abstractWords = 0
+        if let absRegex = try? NSRegularExpression(pattern: #"\\begin\{abstract\}([\s\S]*?)\\end\{abstract\}"#) {
+            let ns = uncommentedBody as NSString
+            if let match = absRegex.firstMatch(in: uncommentedBody, range: NSRange(location: 0, length: ns.length)),
+               match.numberOfRanges >= 2 {
+                let rawAbs = ns.substring(with: match.range(at: 1))
+                abstractWords = countProseWords(in: rawAbs)
+            }
+        }
+
+        // 3. Figures and Tables count
+        let figureCount = countMatches(#"\\includegraphics(?:\[[^\]]*\])?\{[^}]+\}"#, in: uncommentedBody)
+        let tableEnvCount = countMatches(#"\\begin\{table\*?\}"#, in: uncommentedBody)
+        let tabularEnvCount = countMatches(#"\\begin\{tabular\*?\}"#, in: uncommentedBody)
+        let tableCount = tableEnvCount > 0 ? tableEnvCount : tabularEnvCount
+
+        // 4. Reference count
+        let inlineBibCount = countMatches(#"\\bibitem(?:\[[^\]]*\])?\{[^}]+\}"#, in: uncommentedBody)
+        let referenceCount = max(bibEntries.count, inlineBibCount)
+
+        // 5. Prose-only word count: exclude math, tables, figures, tikz, code, expl3, and bibliography blocks
+        var proseRegion = uncommentedBody
+        let blockExclusions = [
+            #"\\ExplSyntaxOn[\s\S]*?\\ExplSyntaxOff"#,
+            #"\\begin\{(?:table|table\*|tabular|tabular\*|equation|equation\*|align|align\*|gather|gather\*|multline|multline\*|thebibliography|tikzpicture|axis|lstlisting|minted|verbatim|pycode|python)\}[\s\S]*?\\end\{(?:table|table\*|tabular|tabular\*|equation|equation\*|align|align\*|gather|gather\*|multline|multline\*|thebibliography|tikzpicture|axis|lstlisting|minted|verbatim|pycode|python)\}"#,
+            #"\$\$[\s\S]*?\$\$"#,
+            #"\\\[[\s\S]*?\\\]"#,
+            #"\\\([\s\S]*?\\\)"#,
+            #"(?<!\\)\$[^$\n]+(?<!\\)\$"#,
+            #"\\(?:cite|parencite|textcite|autocite|footcite|citep|citet|ref|eqref|cref|Cref|label|usepackage|includegraphics|begin|end)\*?(?:\[[^\]]*\])*\{[^{}]*\}"#
+        ]
+        for pattern in blockExclusions {
+            proseRegion = stripMatches(pattern, from: proseRegion)
+        }
+        let proseWords = countProseWords(in: proseRegion)
+        let readingMinutes = proseWords == 0 ? 0 : max(1, Int(ceil(Double(proseWords) / 225.0)))
+
+        return AcademicDocumentStats(
+            proseWordCount: proseWords,
+            abstractWordCount: abstractWords,
+            referenceCount: referenceCount,
+            figureCount: figureCount,
+            tableCount: tableCount,
+            pageCount: max(0, pageCount),
+            estimatedReadingMinutes: readingMinutes
+        )
+    }
+
+    private static func countProseWords(in fragment: String) -> Int {
+        var cleaned = stripMatches(#"(?<!\\)%.*$"#, from: fragment, options: [.anchorsMatchLines])
+        cleaned = stripMatches(#"\\[a-zA-Z@_*]+(?::[a-zA-Z]*)?\*?"#, from: cleaned)
+        cleaned = stripMatches(#"\[[a-zA-Z0-9_=.,:\\/\-\s]+\]"#, from: cleaned)
+        let words = cleaned
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { token in
+                guard !token.isEmpty else { return false }
+                return token.count >= 2 || token.first?.isLetter == true
+            }
+        return words.count
+    }
+
+    private static func stripMatches(
+        _ pattern: String,
+        from input: String,
+        options: NSRegularExpression.Options = []
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return input
+        }
+        let ns = input as NSString
+        return regex.stringByReplacingMatches(
+            in: input,
+            range: NSRange(location: 0, length: ns.length),
+            withTemplate: " "
+        )
+    }
+
+    private static func countMatches(_ pattern: String, in input: String) -> Int {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return 0 }
+        let ns = input as NSString
+        return regex.numberOfMatches(in: input, range: NSRange(location: 0, length: ns.length))
+    }
 }

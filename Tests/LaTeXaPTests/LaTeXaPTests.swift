@@ -657,4 +657,838 @@ struct LaTeXaPTests {
         #expect(try service.loadManifest().isEmpty)
         #expect(FileManager.default.fileExists(atPath: service.manifestURL.path))
     }
+
+    // MARK: - v0.2.0 Academic Paper Authoring Suite Tests
+
+    @Test func academicModelsCitationFormattingAndSanitization() {
+        #expect(CitationCommandStyle.cite.format(key: "vaswani2017") == "\\cite{vaswani2017}")
+        #expect(CitationCommandStyle.parencite.format(key: "vaswani2017", pageLocator: "p. 12") == "\\parencite[p. 12]{vaswani2017}")
+        #expect(CitationCommandStyle.textcite.format(key: "knuth1984", pageLocator: "ch. 3") == "\\textcite[ch. 3]{knuth1984}")
+        #expect(CitationCommandStyle.autocite.format(key: "doe2025") == "\\autocite{doe2025}")
+        #expect(CitationCommandStyle.footcite.format(key: "doe2025") == "\\footcite{doe2025}")
+
+        // Injection resistance in cite keys and page locators
+        let maliciousCite = CitationCommandStyle.parencite.format(key: "bad}\\write18{id", pageLocator: "p. 5]{evil\\input{x}")
+        #expect(!maliciousCite.contains("\\write18"))
+        #expect(!maliciousCite.contains("p. 5]{evil"))
+        #expect(!maliciousCite.contains("\\input"))
+
+        // TeX text escaping and external metadata sanitization
+        let escaped = AcademicSanitizer.escapeLaTeXText("R&D Results: 95% Accuracy_v2 \\write18{bad}")
+        #expect(escaped.contains("R\\&D"))
+        #expect(escaped.contains("95\\%"))
+        #expect(escaped.contains("Accuracy\\_v2"))
+        #expect(!escaped.contains("\\write18"))
+
+        let extClean = AcademicSanitizer.sanitizeExternalMetadata("Deep Learning \\write18{id} & {Vision} % 100%")
+        #expect(!extClean.contains("\\write18"))
+        #expect(!extClean.contains("{"))
+        #expect(!extClean.contains("}"))
+        #expect(extClean.contains("\\&"))
+        #expect(extClean.contains("\\%"))
+
+        // Relative path validation blocks traversal, absolute paths, and backslashes
+        #expect(AcademicSanitizer.validatedRelativeAssetPath("figures/plot-1.png") == "figures/plot-1.png")
+        #expect(AcademicSanitizer.validatedRelativeAssetPath("../secret.png") == nil)
+        #expect(AcademicSanitizer.validatedRelativeAssetPath("/etc/passwd") == nil)
+        #expect(AcademicSanitizer.validatedRelativeAssetPath("figures\\plot.png") == nil)
+        #expect(AcademicSanitizer.validatedRelativeAssetPath("C:figures/plot.png") == nil)
+        #expect(AcademicSanitizer.sanitizeFigureFileName("../../evil {img}%.png") == "evil-img.png")
+    }
+
+    @Test func crossRefJSONParsingBibTeXParsingAndMerging() throws {
+        let crossRefJSON = #"""
+        {
+          "status": "ok",
+          "message": {
+            "items": [
+              {
+                "DOI": "10.5555/3295222.3295349",
+                "type": "proceedings-article",
+                "title": ["Attention Is {All} You Need \\write18{id} & More"],
+                "author": [
+                  {"given": "Ashish", "family": "Vaswani"},
+                  {"given": "Noam", "family": "Shazeer"}
+                ],
+                "container-title": ["Advances in Neural Information Processing Systems"],
+                "published-print": {"date-parts": [[2017]]}
+              }
+            ]
+          }
+        }
+        """#.data(using: .utf8)!
+
+        let crossRefEntries = try BibliographyService.parseCrossRefWorksJSON(crossRefJSON)
+        #expect(crossRefEntries.count == 1)
+        if let first = crossRefEntries.first {
+            #expect(first.entryType == "inproceedings")
+            #expect(first.year == "2017")
+            #expect(first.author.contains("Ashish Vaswani"))
+            #expect(!first.title.contains("\\write18"))
+            #expect(first.title.contains("\\&"))
+            #expect(first.rawBibTeX.contains("@inproceedings{"))
+        }
+
+        // Balanced-brace BibTeX parsing & collision merging
+        let bibSample = """
+        @article{knuth1984,
+          author = {Donald E. Knuth},
+          title = {Literate {Programming} in {TeX}},
+          journal = {The Computer Journal},
+          year = {1984}
+        }
+        """
+        let parsed = try BibliographyService.parseBibContent(bibSample)
+        #expect(parsed.count == 1)
+        #expect(parsed.first?.key == "knuth1984")
+        #expect(parsed.first?.title == "Literate {Programming} in {TeX}")
+
+        let duplicate = BibEntry(
+            key: "knuth1984",
+            entryType: "book",
+            title: "The TeXbook",
+            author: "Donald E. Knuth",
+            year: "1984"
+        )
+        let merged = BibliographyService.mergeEntries([duplicate], intoExistingBibContent: bibSample, replaceDuplicates: false)
+        #expect(merged.duplicateKeys == ["knuth1984"])
+        #expect(merged.addedKeys == ["knuth19842"])
+        let reparsed = try BibliographyService.parseBibContent(merged.mergedContent)
+        #expect(reparsed.count == 2)
+
+        // Malformed BibTeX throws line-numbered error
+        let badBib = "\n\n@article{unclosed,\n  title = {Missing brace}"
+        do {
+            _ = try BibliographyService.parseBibContent(badBib, strict: true)
+            Issue.record("Expected BibTeXError.syntaxError")
+        } catch let err as BibTeXError {
+            if case .syntaxError(let line, _) = err {
+                #expect(line == 3)
+            } else {
+                Issue.record("Unexpected error variant: \(err)")
+            }
+        }
+
+        // Multi-command citation & ref extraction
+        let texSource = """
+        See \\parencite[p. 4]{knuth1984, vaswani2017} and \\textcite{doe2024}.
+        Compare \\cref{fig:results} with \\eqref{eq:loss}.
+        """
+        let citeUses = BibliographyService.extractCitations(from: texSource)
+        #expect(citeUses.map(\.key) == ["knuth1984", "vaswani2017", "doe2024"])
+        let refUses = BibliographyService.extractReferences(from: texSource)
+        #expect(refUses.map(\.label) == ["fig:results", "eq:loss"])
+
+        // Symlinked .bib file rejected
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("LaTeXaPBibSec-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let realBib = tempDir.appendingPathComponent("real.bib")
+        let linkBib = tempDir.appendingPathComponent("link.bib")
+        try bibSample.write(to: realBib, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: linkBib, withDestinationURL: realBib)
+        #expect(throws: BibTeXError.self) {
+            _ = try BibliographyService.parseBibFile(at: linkBib)
+        }
+    }
+
+    @Test func academicPreflightChecksAndErrorDemystifier() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("LaTeXaPPreflight-\(UUID().uuidString)", isDirectory: true)
+        let figsDir = tempDir.appendingPathComponent("figures", isDirectory: true)
+        try FileManager.default.createDirectory(at: figsDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: figsDir.appendingPathComponent("valid.png"))
+
+        let entries = [
+            BibEntry(key: "smith2024", entryType: "article", title: "Paper", author: "Smith", year: "2024"),
+            BibEntry(key: "unused2020", entryType: "article", title: "Unused", author: "Old", year: "2020")
+        ]
+        let sourceWithIssues = #"""
+        \documentclass{article}
+        \usepackage{graphicx}
+        \begin{document}
+        \section{Intro}\label{sec:intro}
+        We cite \parencite{smith2024} and \cite{missing2025}.
+        See Section~\ref{sec:missing}.
+        \includegraphics{figures/valid.png}
+        \includegraphics{figures/nope.png}
+        \includegraphics{/Users/someone/Desktop/abs.png}
+        \end{document}
+        """#
+
+        let report = AcademicPreflightService.analyze(
+            source: sourceWithIssues,
+            bibEntries: entries,
+            diagnostics: [LaTeXDiagnostic(line: 5, severity: .info, message: "Overfull \\hbox (8.2pt too wide) in paragraph at lines 5--5")],
+            documentDirectory: tempDir,
+            stats: AcademicDocumentStats(proseWordCount: 1200, abstractWordCount: 300, pageCount: 10),
+            rubricTargets: RubricTargetConfig(targetProseWords: 1000, maxPageCount: 8, maxAbstractWords: 250)
+        )
+        #expect(!report.isSubmissionReady)
+        #expect(report.unresolvedCitations == ["missing2025"])
+        #expect(report.unresolvedReferences == ["sec:missing"])
+        #expect(report.uncitedBibKeys == ["unused2020"])
+        #expect(report.missingFigurePaths.contains("figures/nope.png"))
+        #expect(report.missingFigurePaths.contains("/Users/someone/Desktop/abs.png"))
+        #expect(report.items.contains(where: { $0.category == "Budget" }))
+        #expect(report.items.contains(where: { $0.id == "missing-pkg-biblatex" && $0.fixOperation != nil }))
+
+        // Clean source passes preflight
+        let cleanSource = #"""
+        \documentclass{article}
+        \usepackage{graphicx}
+        \usepackage[style=apa,backend=biber]{biblatex}
+        \begin{document}
+        \section{Intro}\label{sec:intro}
+        See Section~\ref{sec:intro} and \parencite{smith2024}.
+        \includegraphics{figures/valid.png}
+        \end{document}
+        """#
+        let cleanReport = AcademicPreflightService.analyze(
+            source: cleanSource,
+            bibEntries: [entries[0]],
+            diagnostics: [],
+            documentDirectory: tempDir
+        )
+        #expect(cleanReport.isSubmissionReady)
+        #expect(cleanReport.items.isEmpty)
+
+        // Error Demystifier mapping
+        let rawDoc = #"""
+        \documentclass{article}
+        \begin{document}
+        Research & Development is fun.
+        score_value = 42
+        \qty{9.81}{m/s^2}
+        \textbf{unclosed
+        \end{document}
+        """#
+        let diags = [
+            LaTeXDiagnostic(line: 3, severity: .error, message: "Misplaced alignment tab character &."),
+            LaTeXDiagnostic(line: 4, severity: .error, message: "Missing $ inserted."),
+            LaTeXDiagnostic(line: 5, severity: .error, message: "Undefined control sequence."),
+            LaTeXDiagnostic(line: 6, severity: .error, message: "Runaway argument?")
+        ]
+        let demystified = ContextSuggestionsEngine.demystify(diagnostics: diags, source: rawDoc)
+        #expect(demystified.count == 4)
+        #expect(demystified[0].shortTitle.contains("'&'"))
+        if case .replaceLine(let line, _, let replacement) = demystified[0].fixOperation {
+            #expect(line == 3)
+            #expect(replacement.contains("\\&"))
+        } else {
+            Issue.record("Expected replaceLine fix for unescaped &")
+        }
+        if case .replaceLine(let line, _, let replacement) = demystified[1].fixOperation {
+            #expect(line == 4)
+            #expect(replacement.contains("\\_"))
+        } else {
+            Issue.record("Expected replaceLine fix for underscore")
+        }
+        #expect(demystified[2].fixOperation == .insertPackage(packageName: "siunitx", options: ""))
+        #expect(demystified[3].fixOperation == .appendMissingBrace(lineNumber: 6))
+    }
+
+    @Test func academicToolsGridCSVPGFPlotsAndSubfigures() {
+        let csv = "Model, \"Accuracy, (%)\", Notes\nBaseline, 81.2, A & B\nOurs, 93.4, $x^2$ fast"
+        let grid = AcademicToolsGenerator.csvToTableGrid(csv)
+        #expect(grid.headers == ["Model", "Accuracy, (%)", "Notes"])
+        #expect(grid.rows.count == 2)
+        #expect(grid.rows[0][2] == "A & B")
+
+        let roundtripCSV = AcademicToolsGenerator.tableGridToCSV(grid)
+        #expect(roundtripCSV.contains("\"Accuracy, (%)\""))
+
+        let booktabs = AcademicToolsGenerator.generateBooktabsTable(from: grid)
+        #expect(booktabs.contains("\\toprule"))
+        #expect(booktabs.contains("A \\& B"))
+        #expect(booktabs.contains("Accuracy, (\\%)"))
+        #expect(booktabs.contains("$x^2$"))
+
+        // Numeric Line Chart
+        let lineCfg = PGFPlotChartConfig(
+            chartType: .line,
+            title: "Training & Validation Loss",
+            xLabel: "Epoch",
+            yLabel: "Loss (%)",
+            csvText: "Epoch, Train Loss\n1, 1.2\n2, 0.7\n3, 0.35"
+        )
+        let lineTeX = AcademicToolsGenerator.generatePGFPlotChart(from: lineCfg)
+        #expect(lineTeX.contains("\\begin{axis}["))
+        #expect(lineTeX.contains("Training \\& Validation Loss"))
+        #expect(lineTeX.contains("(1, 1.2) (2, 0.7) (3, 0.35)"))
+
+        // Categorical Bar Chart uses symbolic x coords
+        let barCfg = PGFPlotChartConfig(
+            chartType: .bar,
+            title: "Benchmark",
+            xLabel: "System",
+            yLabel: "Score",
+            csvText: "System, Score\nAlpha, 84\nBeta, 92"
+        )
+        let barTeX = AcademicToolsGenerator.generatePGFPlotChart(from: barCfg)
+        #expect(barTeX.contains("ybar"))
+        #expect(barTeX.contains("symbolic x coords={Alpha,Beta}"))
+
+        // Side-by-side Subfigures + traversal guard
+        let figCfg = FigureInsertConfig(
+            primaryRelativePath: "../outside/a.png",
+            secondaryRelativePath: "figures/b.png",
+            widthFraction: 0.9,
+            placement: "htbp",
+            caption: "A & B Comparison",
+            label: "comp-fig",
+            primarySubcaption: "First",
+            secondarySubcaption: "Second"
+        )
+        let figTeX = AcademicToolsGenerator.generateFigureSnippet(from: figCfg)
+        #expect(figTeX.contains("\\begin{subfigure}"))
+        #expect(!figTeX.contains("../outside"))
+        #expect(figTeX.contains("figures/a.png"))
+        #expect(figTeX.contains("figures/b.png"))
+        #expect(figTeX.contains("\\label{fig:comp-fig}"))
+    }
+
+    @Test func latexAwareProseSpellCheckMaskingAndSuggestions() {
+        let doc = #"""
+        \documentclass{article}
+        \title{TypppoInPreambleShouldBeIgnored}
+        \ExplSyntaxOn
+        \tl_new:N \l_typppo_ignored_tl
+        \ExplSyntaxOff
+        \begin{document}
+        % Commetn typo should be ignored
+        See \parencite{nonexistentkey} and \ref{fig:badkeyname}.
+        Equation $x_{typppo} + y = z$ and command \textbf{recieve}.
+        \begin{equation}
+          \alpha_{typppo} = 1
+        \end{equation}
+        Thiss sentnce has clear mispellings.
+        \end{document}
+        """#
+
+        let masked = LaTeXSpellCheckService.maskedProseString(from: doc)
+        #expect((masked as NSString).length == (doc as NSString).length)
+        #expect(!masked.contains("TypppoInPreambleShouldBeIgnored"))
+        #expect(!masked.contains("l_typppo_ignored_tl"))
+        #expect(!masked.contains("Commetn"))
+        #expect(!masked.contains("nonexistentkey"))
+        #expect(!masked.contains("badkeyname"))
+        #expect(!masked.contains("typppo"))
+        #expect(masked.contains("recieve"))
+        #expect(masked.contains("Thiss"))
+
+        let issues = LaTeXSpellCheckService.scan(source: doc)
+        let issueWords = Set(issues.map(\.word))
+        #expect(!issueWords.contains("TypppoInPreambleShouldBeIgnored"))
+        #expect(!issueWords.contains("nonexistentkey"))
+        #expect(!issueWords.contains("typppo"))
+        #expect(!issueWords.isDisjoint(with: ["recieve", "Thiss", "sentnce", "mispellings"]))
+        if let hit = issues.first(where: { $0.word == "recieve" }) {
+            #expect(hit.line == 9)
+            #expect(hit.suggestions.contains("receive"))
+        }
+    }
+
+    @Test func academicStatisticsAndPaperSetupWizardTemplates() {
+        let tex = #"""
+        \documentclass{article}
+        \begin{document}
+        \begin{abstract}
+        This concise abstract contains eight simple prose words.
+        \end{abstract}
+        \section{Introduction}
+        Only body prose words belong here \parencite{ref1}.
+        \begin{equation}
+        E = m c^2
+        \end{equation}
+        \begin{table}
+        \begin{tabular}{cc}
+        ColA & ColB \\
+        \end{tabular}
+        \end{table}
+        \includegraphics{figures/fig1.png}
+        \end{document}
+        """#
+        let stats = Expl3Linter.computeAcademicStatistics(
+            source: tex,
+            bibEntries: [BibEntry(key: "ref1", entryType: "article", title: "T", author: "A", year: "2024")],
+            pageCount: 4
+        )
+        #expect(stats.abstractWordCount == 8)
+        #expect(stats.figureCount == 1)
+        #expect(stats.tableCount == 1)
+        #expect(stats.referenceCount == 1)
+        #expect(stats.pageCount == 4)
+        #expect(stats.proseWordCount >= 12 && stats.proseWordCount <= 18)
+
+        // All 7 academic templates and 10 packages present
+        let templateIDs = Set(LaTeXCatalog.templates.map(\.id))
+        for expectedID in ["apa7-student", "ieee-conference", "acm-article", "mla-essay", "stem-lab-report", "university-thesis", "beamer-slides"] {
+            #expect(templateIDs.contains(expectedID))
+        }
+        let pkgNames = Set(LaTeXCatalog.commonPackages.map(\.package))
+        for expectedPkg in ["biblatex", "natbib", "pgfplots", "subcaption", "setspace", "lineno", "apa7", "IEEEtran", "acmart", "mhchem"] {
+            #expect(pkgNames.contains(expectedPkg))
+        }
+
+        // Paper Wizard generation applies blind review, double spacing, and sanitizes metadata
+        let wizardCfg = PaperSetupConfig(
+            templateId: "apa7-student",
+            title: "AI & Society: 100% Ready",
+            author: "Jane Doe",
+            institution: "State University",
+            courseOrVenue: "CS 401",
+            paperSize: .a4paper,
+            baseFontSizePt: 11,
+            doubleSpacing: true,
+            anonymizedBlindReview: true,
+            bibliographyStyle: .ieee
+        )
+        let generated = LaTeXCatalog.generateWizardDocument(from: wizardCfg)
+        #expect(generated.contains("\\documentclass[11pt,a4paper]{article}"))
+        #expect(generated.contains("AI \\& Society: 100\\% Ready"))
+        #expect(generated.contains("Anonymous Author(s)"))
+        #expect(!generated.contains("Jane Doe"))
+        #expect(generated.contains("\\usepackage{lineno}"))
+        #expect(generated.contains("\\linenumbers"))
+        #expect(generated.contains("\\doublespacing"))
+        #expect(generated.contains("style=ieee"))
+    }
+
+    @Test func tectonicStagingAndSubmissionBundleExportAndSecurity() async throws {
+        // 1x1 transparent PNG
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        let pngData = Data(base64Encoded: pngBase64)!
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPExportTests-\(UUID().uuidString)", isDirectory: true)
+        let projDir = tempRoot.appendingPathComponent("Project", isDirectory: true)
+        let figsDir = projDir.appendingPathComponent("figures", isDirectory: true)
+        try FileManager.default.createDirectory(at: figsDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let figURL = figsDir.appendingPathComponent("chart.png")
+        try pngData.write(to: figURL)
+
+        // Create an outside secret file & symlinked figure to verify security guards
+        let secretURL = tempRoot.appendingPathComponent("secret.png")
+        try pngData.write(to: secretURL)
+        let symlinkFigURL = figsDir.appendingPathComponent("symlinked.png")
+        try FileManager.default.createSymbolicLink(at: symlinkFigURL, withDestinationURL: secretURL)
+
+        let source = #"""
+        \documentclass{article}
+        \usepackage{graphicx}
+        \author{Real Author Name}
+        \begin{document}
+        % Secret internal comment
+        Hello World.
+        \begin{figure}[htbp]
+          \centering
+          \includegraphics[width=0.5\textwidth]{figures/chart.png}
+        \end{figure}
+        \includegraphics{figures/symlinked.png}
+        \input{../secret}
+        \end{document}
+        """#
+
+        let bibContent = """
+        @article{demo2026,
+          author = {Author, A.},
+          title = {Demo Paper},
+          year = {2026}
+        }
+        """
+
+        // 1. Verify TectonicService stages figures/ and references.bib into buildDir and ignores traversal keys
+        let tectonic = TectonicService()
+        let compileRes = await tectonic.compile(
+            source: #"""
+            \documentclass{article}
+            \usepackage{graphicx}
+            \begin{document}
+            \includegraphics[width=0.4\textwidth]{figures/chart.png}
+            \end{document}
+            """#,
+            documentDirectory: nil,
+            fontDirectories: [],
+            additionalTextFiles: ["references.bib": bibContent, "../escape.bib": "bad"],
+            assetSearchDirectories: [figsDir]
+        )
+        #expect(compileRes.success, "Expected staged figure compilation to pass. Log: \(compileRes.logOutput)")
+
+        // 2. Verify SubmissionExportService produces clean .zip with anonymization + comment stripping + security guards
+        let zipURL = tempRoot.appendingPathComponent("my-submission.zip")
+        let exportResult = try await SubmissionExportService.exportBundle(
+            source: source,
+            mainFileName: "paper.tex",
+            destinationZipURL: zipURL,
+            managedBibContent: bibContent,
+            documentDirectory: projDir,
+            stripComments: true,
+            anonymize: true,
+            verifyCompileWithTectonic: false
+        )
+        #expect(FileManager.default.fileExists(atPath: exportResult.zipURL.path))
+        #expect(exportResult.includedFiles.contains("paper.tex"))
+        #expect(exportResult.includedFiles.contains("references.bib"))
+        #expect(exportResult.includedFiles.contains("figures/chart.png"))
+        #expect(!exportResult.includedFiles.contains("figures/symlinked.png"))
+        #expect(exportResult.preflightWarnings.contains(where: { $0.contains("../secret") }))
+
+        // Inspect extracted contents via ditto
+        let unpackDir = tempRoot.appendingPathComponent("Unpacked", isDirectory: true)
+        try FileManager.default.createDirectory(at: unpackDir, withIntermediateDirectories: true)
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        proc.arguments = ["-x", "-k", zipURL.path, unpackDir.path]
+        try proc.run()
+        proc.waitUntilExit()
+        #expect(proc.terminationStatus == 0)
+
+        let bundledTeX = try String(
+            contentsOf: unpackDir.appendingPathComponent("my-submission/paper.tex"),
+            encoding: .utf8
+        )
+        #expect(!bundledTeX.contains("Real Author Name"))
+        #expect(bundledTeX.contains("Anonymous Author(s)"))
+        #expect(bundledTeX.contains("\\linenumbers"))
+        #expect(!bundledTeX.contains("Secret internal comment"))
+    }
+
+    @Test @MainActor func documentViewModelAcademicWorkflows() async throws {
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        let pngData = Data(base64Encoded: pngBase64)!
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPVMAcademic-\(UUID().uuidString)", isDirectory: true)
+        let storageDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+        let tempFigs = tempRoot.appendingPathComponent("TempFigures", isDirectory: true)
+        let sourceStaging = tempRoot.appendingPathComponent("SourceImages", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceStaging, withIntermediateDirectories: true)
+
+        let suiteName = "LaTeXaPAcademicTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let vm = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: FontLibraryService(storageDirectory: storageDir),
+            userDefaults: defaults,
+            tempFiguresDirectory: tempFigs,
+            compileOnInit: false
+        )
+        vm.autoCompileEnabled = false
+
+        // 1. Rubric Targets + Spellcheck persistence
+        vm.updateRubricTargets(RubricTargetConfig(targetProseWords: 2000, maxPageCount: 6, maxAbstractWords: 200, studentModeHideExpl3: true))
+        vm.proseSpellCheckEnabled = true
+
+        let vm2 = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: FontLibraryService(storageDirectory: storageDir),
+            userDefaults: defaults,
+            tempFiguresDirectory: tempFigs,
+            compileOnInit: false
+        )
+        #expect(vm2.rubricTargets.targetProseWords == 2000)
+        #expect(vm2.rubricTargets.studentModeHideExpl3 == true)
+        #expect(vm2.proseSpellCheckEnabled == true)
+
+        // 2. Bib import, style switch, and caret citation insertion
+        let sampleEntry = BibEntry(
+            key: "vaswani2017attention",
+            entryType: "inproceedings",
+            title: "Attention Is All You Need",
+            author: "Ashish Vaswani",
+            year: "2017"
+        )
+        vm.importBibEntry(sampleEntry)
+        #expect(vm.managedBibContent.contains("vaswani2017attention"))
+        #expect(vm.bibEntries.contains(where: { $0.key == "vaswani2017attention" }))
+
+        vm.applyBibliographyStyle(.ieee)
+        #expect(vm.sourceText.contains("style=ieee"))
+        #expect(vm.sourceText.contains("\\addbibresource{references.bib}"))
+
+        vm.insertFormattedCitation(sampleEntry, style: .parencite, pageLocator: "p. 7")
+        #expect(vm.pendingEditorInsertion?.text == "\\parencite[p. 7]{vaswani2017attention}")
+
+        // 3. Blind review & double spacing toggles
+        vm.toggleBlindReview(true)
+        #expect(vm.isBlindReviewEnabled)
+        #expect(vm.sourceText.contains("\\linenumbers"))
+        vm.toggleBlindReview(false)
+        #expect(!vm.sourceText.contains("\\linenumbers"))
+
+        vm.toggleDoubleSpacing(true)
+        #expect(vm.isDoubleSpacedEnabled)
+        #expect(vm.sourceText.contains("\\doublespacing"))
+        vm.toggleDoubleSpacing(false)
+        #expect(!vm.sourceText.contains("\\doublespacing"))
+
+        // 4. 1-Click Academic Fix Operations
+        vm.sourceText = "\\documentclass{article}\n\\begin{document}\nA & B\n\\end{document}"
+        vm.applyAcademicFix(.replaceLine(lineNumber: 3, originalSubstring: "A & B", replacement: "A \\& B"))
+        #expect(vm.sourceText.contains("A \\& B"))
+        vm.applyAcademicFix(.insertPackage(packageName: "booktabs", options: ""))
+        #expect(vm.sourceText.contains("\\usepackage{booktabs}"))
+
+        // 5. Spreadsheet Table, PGFPlot Chart & Relative Figure insertion
+        vm.insertSpreadsheetTable()
+        #expect(vm.pendingEditorInsertion?.text.contains("\\begin{table}") == true)
+
+        vm.insertPGFPlotChart()
+        #expect(vm.sourceText.contains("\\usepackage{pgfplots}"))
+        #expect(vm.pendingEditorInsertion?.text.contains("\\begin{axis}") == true)
+
+        let rawImg = sourceStaging.appendingPathComponent("My Plot.png")
+        try pngData.write(to: rawImg)
+        vm.insertFigureWithConfig(
+            sourceURL: rawImg,
+            secondaryURL: nil,
+            config: FigureInsertConfig(caption: "Loss curve", label: "fig:loss")
+        )
+        #expect(vm.sourceText.contains("\\usepackage{graphicx}"))
+        #expect(vm.pendingEditorInsertion?.text.contains("figures/My-Plot.png") == true)
+        #expect(FileManager.default.fileExists(atPath: tempFigs.appendingPathComponent("My-Plot.png").path))
+
+        // 6. Autocomplete supports \parencite and \textcite from managed bibEntries
+        let citeDoc = "\\textcite{vas"
+        let q = LaTeXAutoCompleteEngine.extractQuery(in: citeDoc, cursorLocation: (citeDoc as NSString).length)
+        #expect(q?.enclosingCommand == "cite")
+        if let q {
+            let suggestions = LaTeXAutoCompleteEngine.suggestions(for: q, in: citeDoc, bibEntries: vm.bibEntries)
+            #expect(suggestions.first?.trigger == "vaswani2017attention")
+        }
+    }
+
+    @Test @MainActor func phase3SecurityAndEdgeCaseRegressions() async throws {
+        // 1. Inline math brace-breakout & command allowlist (#44 Finding 1)
+        let braceBreakout = AcademicSanitizer.escapeLaTeXText(#"Title $}$ \def\x{evil}$"#, allowSafeInlineMath: true)
+        #expect(!braceBreakout.contains(#"\def"#))
+        #expect(!braceBreakout.contains("}$"))
+        #expect(braceBreakout.contains(#"\$"#))
+        #expect(braceBreakout.contains(#"\}"#))
+
+        let csnameAttack = AcademicSanitizer.escapeLaTeXText(#"$\csname openin\endcsname$"#, allowSafeInlineMath: true)
+        #expect(!csnameAttack.contains(#"\csname"#))
+        #expect(csnameAttack.contains(#"\textbackslash{}"#))
+
+        let safeMath = AcademicSanitizer.escapeLaTeXText(#"Accuracy $10^{-3}$ with $\alpha$"#, allowSafeInlineMath: true)
+        #expect(safeMath == #"Accuracy $10^{-3}$ with $\alpha$"#)
+
+        // 2. Unsanitized network BibEntry & \bibitem passthrough (#44 Finding 2)
+        let dirtyEntry = BibEntry(
+            key: "evil}{\\write18{id}",
+            entryType: "article",
+            title: #"Paper Title}\input{/etc/passwd}"#,
+            author: #"Alice \immediate\write18{ls}"#,
+            year: "2026}{bad",
+            venue: "Conf % secret",
+            rawBibTeX: "@preamble{\"\\write18{pwn}\"}\n@article{evil, title={raw}}"
+        )
+        let sanitizedNet = BibliographyService.sanitizeNetworkEntry(dirtyEntry)
+        #expect(!sanitizedNet.rawBibTeX.contains("@preamble"))
+        #expect(!sanitizedNet.rawBibTeX.contains(#"\write18"#))
+        #expect(!sanitizedNet.rawBibTeX.contains(#"\input"#))
+        #expect(sanitizedNet.rawBibTeX.contains(#"\%"#))
+
+        // 3. SSRF validation for RFC1918, CGNAT, IPv6 ULA/link-local/mapped, localhost, single-label (#44 Finding 3)
+        let blockedURLs = [
+            "http://172.16.0.1/meta",
+            "http://172.31.255.254/",
+            "http://100.64.0.1/cgnat",
+            "http://10.0.0.1/internal",
+            "http://192.168.1.1/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://127.0.0.1:8080/",
+            "http://0.0.0.0/",
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "http://[fc00::1]/",
+            "http://[fd12:3456:789a::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://[::ffff:172.16.0.5]/",
+            "http://localhost/admin",
+            "http://api.internal/secret",
+            "http://printer.local/",
+            "http://intranet/path",
+            "ftp://example.org/file"
+        ]
+        for bad in blockedURLs {
+            #expect(BibliographyService.validatedExternalWebURL(bad) == nil, "Expected SSRF guard to block \(bad)")
+        }
+        #expect(BibliographyService.validatedExternalWebURL("https://example.org/paper") != nil)
+        #expect(BibliographyService.validatedExternalWebURL("https://arxiv.org/abs/2305.12345") != nil)
+
+        // 4. PGFPlots finite decimal coordinate enforcement (#44 Finding 5)
+        let badPlotCfg = PGFPlotChartConfig(
+            chartType: .line,
+            title: "Finite Check",
+            xLabel: "X",
+            yLabel: "Y",
+            csvText: "x, y\nnan, 1.0\ninf, 2.0\n0x10, 3.0\n1.5, 4.0"
+        )
+        let plotTeX = AcademicToolsGenerator.generatePGFPlotChart(from: badPlotCfg)
+        #expect(plotTeX.contains("symbolic x coords={nan,inf,0x10,1.5}"))
+
+        let numPlotCfg = PGFPlotChartConfig(
+            chartType: .line,
+            title: "Numeric Check",
+            xLabel: "X",
+            yLabel: "Y",
+            csvText: "x, y\n1e0, 2.0\n3.00, 4.0"
+        )
+        let numPlotTeX = AcademicToolsGenerator.generatePGFPlotChart(from: numPlotCfg)
+        #expect(!numPlotTeX.contains("symbolic x coords"))
+        #expect(numPlotTeX.contains("(1, 2) (3, 4)"))
+
+        // 5. Spellcheck preserves prose inside brackets while masking attached command options (#45 Item 5)
+        let bracketDoc = #"""
+        \documentclass{article}
+        \begin{document}
+        Results hold \parencite[p. 12]{smith2024} [see Appndix A] for details.
+        \begin{figure}[htbp]
+        \centering
+        \caption{Figure caption}
+        \end{figure}
+        \end{document}
+        """#
+        let maskedBrackets = LaTeXSpellCheckService.maskedProseString(from: bracketDoc)
+        #expect(!maskedBrackets.contains("htbp"))
+        #expect(!maskedBrackets.contains("smith2024"))
+        #expect(maskedBrackets.contains("Appndix"))
+        let bracketIssues = LaTeXSpellCheckService.scan(source: bracketDoc)
+        #expect(bracketIssues.contains(where: { $0.word == "Appndix" }))
+
+        // 6. Symlinked figures/ directory, dropped-image validation, stale bib reset, & dotted parent dir (#44.4, #44.5, #45.5)
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        let pngData = Data(base64Encoded: pngBase64)!
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPPhase3Tests-\(UUID().uuidString)", isDirectory: true)
+        let outsideDir = tempRoot.appendingPathComponent("OutsideTarget", isDirectory: true)
+        let projWithSymlinkFigs = tempRoot.appendingPathComponent("ProjSymlink", isDirectory: true)
+        let cleanProj = tempRoot.appendingPathComponent("CleanProj", isDirectory: true)
+        let dottedFigsDir = cleanProj.appendingPathComponent("figures/v1.0", isDirectory: true)
+        let isolatedTectonicDir = tempRoot.appendingPathComponent("IsolatedBuild", isDirectory: true)
+        let tempFigs = tempRoot.appendingPathComponent("TempFigs", isDirectory: true)
+        let storageDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projWithSymlinkFigs, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dottedFigsDir, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: projWithSymlinkFigs.appendingPathComponent("figures"),
+            withDestinationURL: outsideDir
+        )
+
+        let suiteName = "LaTeXaPPhase3VM.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        let validImg = tempRoot.appendingPathComponent("valid.png")
+        try pngData.write(to: validImg)
+        let symlinkImg = tempRoot.appendingPathComponent("evil-link.png")
+        try FileManager.default.createSymbolicLink(at: symlinkImg, withDestinationURL: validImg)
+        let txtFile = tempRoot.appendingPathComponent("not-image.txt")
+        try "hello".write(to: txtFile, atomically: true, encoding: .utf8)
+
+        let vm = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: FontLibraryService(storageDirectory: storageDir),
+            userDefaults: defaults,
+            tempFiguresDirectory: tempFigs,
+            compileOnInit: false
+        )
+        vm.autoCompileEnabled = false
+
+        // Append sanitized \bibitem
+        vm.appendBibItemToSource(dirtyEntry)
+        #expect(!vm.sourceText.contains(#"\write18"#))
+        #expect(!vm.sourceText.contains(#"\input{/etc/passwd}"#))
+
+        // Drop validation rejects symlinks and non-image extensions before opening sheet
+        vm.handleDroppedImageURL(symlinkImg)
+        #expect(vm.pendingDroppedFigureURL == nil)
+        #expect(!vm.showFigureAssistantSheet)
+
+        vm.handleDroppedImageURL(txtFile)
+        #expect(vm.pendingDroppedFigureURL == nil)
+        #expect(!vm.showFigureAssistantSheet)
+
+        vm.handleDroppedImageURL(validImg)
+        #expect(vm.pendingDroppedFigureURL != nil)
+        #expect(vm.showFigureAssistantSheet)
+        vm.showFigureAssistantSheet = false
+        vm.pendingDroppedFigureURL = nil
+
+        // Reject writing into symlinked <docDir>/figures
+        let symlinkDocURL = projWithSymlinkFigs.appendingPathComponent("main.tex")
+        try "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}".write(to: symlinkDocURL, atomically: true, encoding: .utf8)
+        vm.currentFileURL = symlinkDocURL
+        #expect(vm.copyImageAssetToProjectFigures(from: validImg) == nil)
+        #expect(!FileManager.default.fileExists(atPath: outsideDir.appendingPathComponent("valid.png").path))
+
+        // Open document without sibling references.bib clears previous managedBibContent
+        vm.managedBibContent = "@article{stale, title={Stale}, author={X}, year={2020}}"
+        vm.bibLookupError = "Old error"
+        vm.bibSearchResults = [dirtyEntry]
+        let plotPng = dottedFigsDir.appendingPathComponent("plot.png")
+        try pngData.write(to: plotPng)
+        let cleanDocURL = cleanProj.appendingPathComponent("paper.tex")
+        try "\\documentclass{article}\n\\usepackage{graphicx}\n\\begin{document}\n\\includegraphics{figures/v1.0/plot}\n\\end{document}"
+            .write(to: cleanDocURL, atomically: true, encoding: .utf8)
+
+        #expect(vm.loadDocumentFromDisk(at: cleanDocURL))
+        #expect(vm.managedBibContent.isEmpty)
+        #expect(vm.bibSearchResults.isEmpty)
+        #expect(vm.bibLookupError == nil)
+
+        // Preflight pathExtension check probes extension on dotted parent folder `figures/v1.0/plot`
+        let report = AcademicPreflightService.analyze(
+            source: vm.sourceText,
+            bibEntries: [],
+            diagnostics: [],
+            documentDirectory: cleanProj
+        )
+        #expect(report.missingFigurePaths.isEmpty)
+
+        // Bundle export also resolves dotted parent folder extensionless figure `figures/v1.0/plot` -> `figures/v1.0/plot.png`
+        let dottedZip = tempRoot.appendingPathComponent("dotted-submission.zip")
+        let dottedExport = try await SubmissionExportService.exportBundle(
+            source: vm.sourceText,
+            mainFileName: "paper.tex",
+            destinationZipURL: dottedZip,
+            documentDirectory: cleanProj,
+            verifyCompileWithTectonic: false
+        )
+        #expect(dottedExport.includedFiles.contains("figures/v1.0/plot.png"))
+
+        // Isolated TectonicService build workspace compiles without touching global workspace
+        let isolatedTectonic = TectonicService(workspaceDirectory: isolatedTectonicDir)
+        let isoRes = await isolatedTectonic.compile(source: "\\documentclass{article}\\begin{document}Isolated\\end{document}")
+        #expect(isoRes.success)
+        #expect(isoRes.pdfURL?.path.hasPrefix(isolatedTectonicDir.standardizedFileURL.path) == true)
+
+        // Clean submission bundle export with isolated Tectonic verification compile enabled
+        let verifiedZip = tempRoot.appendingPathComponent("verified-submission.zip")
+        let verifiedSource = "\\documentclass{article}\n\\usepackage{graphicx}\n\\begin{document}\n\\includegraphics{figures/v1.0/plot.png}\n\\end{document}"
+        let verifiedExport = try await SubmissionExportService.exportBundle(
+            source: verifiedSource,
+            mainFileName: "paper.tex",
+            destinationZipURL: verifiedZip,
+            documentDirectory: cleanProj,
+            verifyCompileWithTectonic: true
+        )
+        #expect(verifiedExport.compiledCleanly)
+        #expect(verifiedExport.includedFiles.contains("figures/v1.0/plot.png"))
+    }
 }

@@ -1,9 +1,13 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let latexapRequestSubmissionExport = Notification.Name("LaTeXaPRequestSubmissionExport")
+}
+
 enum AppMetadata {
-    static let version = "0.1.2"
-    static let build = "3"
+    static let version = "0.2.0"
+    static let build = "4"
     static let repoURLString = "https://github.com/jameslloyd/LaTeXaP"
     static let repoGitURLString = "https://github.com/jameslloyd/LaTeXaP.git"
     static let repoURL = URL(string: "https://github.com/jameslloyd/LaTeXaP")!
@@ -108,7 +112,12 @@ struct LaTeXaPApp: App {
             }
 
             CommandGroup(replacing: .newItem) {
-                Menu("New from LaTeX3 Template") {
+                Button("New Academic Paper Wizard...") {
+                    viewModel.showPaperWizardSheet = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+
+                Menu("New from Starter Template") {
                     ForEach(LaTeXCatalog.templates) { template in
                         Button(template.name) {
                             viewModel.loadTemplate(template)
@@ -138,6 +147,11 @@ struct LaTeXaPApp: App {
                     viewModel.exportPDF()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Export Submission Bundle (.zip)...") {
+                    NotificationCenter.default.post(name: .latexapRequestSubmissionExport, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift, .option])
             }
 
             CommandMenu("Typeset & LaTeX3") {
@@ -149,6 +163,11 @@ struct LaTeXaPApp: App {
                 Toggle("Live Auto-Compile", isOn: $viewModel.autoCompileEnabled)
 
                 Divider()
+
+                Button("Quick Citation Picker...") {
+                    viewModel.showCitationPickerPopover = true
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
 
                 Button("Forward SyncTeX (Editor → PDF)") {
                     viewModel.triggerForwardSync()
@@ -173,6 +192,21 @@ struct LaTeXaPApp: App {
 
             CommandMenu("View") {
                 Toggle("Light Editor Background", isOn: $viewModel.useLightEditorBackground)
+
+                Toggle("Prose Spellcheck", isOn: $viewModel.proseSpellCheckEnabled)
+                    .keyboardShortcut(";", modifiers: [.command, .option])
+
+                Toggle(
+                    "Student Mode (Hide LaTeX3 Metrics)",
+                    isOn: Binding(
+                        get: { viewModel.rubricTargets.studentModeHideExpl3 },
+                        set: { newValue in
+                            var updated = viewModel.rubricTargets
+                            updated.studentModeHideExpl3 = newValue
+                            viewModel.updateRubricTargets(updated)
+                        }
+                    )
+                )
 
                 Divider()
 

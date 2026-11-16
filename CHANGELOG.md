@@ -2,6 +2,31 @@
 
 All notable changes to **LaTeXaP** are documented in this file.
 
+## [0.2.0] — 2026-11-16
+
+### Added — Academic Paper Authoring Suite
+- **Smart Citations & `.bib` Management (`⇧⌘K`)**:
+  - Added CrossRef title/author/keyword search, ISBN/URL lookup, and `.bib` file import (file picker & drag-and-drop) via `BibliographyService`, with `references.bib` staging inside `TectonicService`.
+  - Added **Quick Citation Picker (`⇧⌘K`)** (`CitationPickerPopoverView`) and upgraded BibTeX sidebar with `Uncited` badges, citation mode selection (`\cite`, `\parencite`, `\textcite`, `\autocite`, `\footcite`) + optional page locators, and a 1-click Bibliography Style switcher (`APA`, `IEEE`, `ACM`, `MLA`, `Chicago`, `Nature`).
+- **Plain-English Error Demystifier & Academic Pre-Flight Linter**:
+  - Added `ContextSuggestionsEngine.demystify(...)` mapping common TeX/LaTeX errors to plain-English explanations and **1-Click Auto-Fix** actions (`AcademicFixOperation`).
+  - Added `AcademicPreflightService` & `PreflightChecklistView` checking unresolved `\cite`/`\ref` keys, uncited `.bib` entries, missing or absolute figure paths, typography hygiene, and budget targets.
+- **Academic Starter Templates & Paper Setup Wizard (`⇧⌘N`)**:
+  - Added 7 academic templates in `LaTeXCatalog.templates`: APA 7th Ed. Student Paper, IEEE Conference Paper, ACM Computing Article, MLA Humanities Essay, STEM Lab Report (`siunitx` + `booktabs`), University Thesis, and Beamer Presentation Slides.
+  - Added **Paper Setup Wizard (`⇧⌘N`)** (`PaperWizardSheetView`) for metadata, paper size, font size, double-spacing (`setspace`), and Anonymized Blind Review (`lineno`).
+- **Interactive Spreadsheet Table Grid, `pgfplots` Chart Builder & Relative Figure Assistant**:
+  - Upgraded `VisualToolsSheetView` with a 2D editable **Spreadsheet Grid** (`L`/`C`/`R` column alignments, bold headers -> `booktabs`), a **CSV → `pgfplots`** chart builder (`Line`, `Bar`, `Scatter`), equation templates, and undo-preserving exact-caret insertion (`EditorInsertionRequest`).
+  - Added `FigureAssistantSheetView` & `AcademicToolsGenerator` copying dropped/selected images into relative `figures/` folders (with `TempFigures` staging for unsaved documents) and generating single or side-by-side (`subcaption`) figure blocks.
+- **Rubric Word/Page Budgets, LaTeX-Aware Prose Spellcheck (`⌥⌘;`) & Submission `.zip` Export (`⌥⇧⌘E`)**:
+  - Added `AcademicDocumentStats` (prose-only, abstract, reference, figure, table, and page counts) and `RubricTargetsPopoverView` with configurable word/abstract/page budgets and **Student Mode** (hiding `expl3` metrics).
+  - Added `LaTeXSpellCheckService` (prose-masked `NSSpellChecker` ignoring preamble, commands, math, comments, and `expl3`) with editor underlines and context-menu replacement suggestions.
+  - Added `SubmissionExportService` (`⌥⇧⌘E`) packaging `.tex`, `\input` files, `.bib`, relative `figures/`, and custom fonts into a clean `.zip` archive with pre-flight verification and Finder reveal.
+
+### Security & Hardening
+- Enforced finite coordinate/data validation in `PGFPlots` chart generation, TeX metacharacter sanitization across CrossRef/BibTeX/`\bibitem`/Wizard/Table/Figure inputs, 2 MB network response caps + HTTPS URL validation, and isolated Tectonic verification workspaces with symlink/path-traversal guards for `figures/` and `.zip` bundling.
+
+---
+
 ## [0.1.2] — 2026-11-16
 
 ### Added

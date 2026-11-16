@@ -85,29 +85,106 @@ public final class DocumentViewModel: ObservableObject {
     // Non-intrusive GitHub release update notification state
     @Published public var availableUpdate: AppReleaseUpdate?
 
+    // MARK: - Academic Citations & Bibliography State (v0.2.0)
+    @Published public var managedBibContent: String = "" {
+        didSet {
+            if managedBibContent != oldValue {
+                refreshDerivedMetadata()
+                if autoCompileEnabled {
+                    scheduleDebouncedCompilation()
+                }
+            }
+        }
+    }
+    @Published public var bibSearchResults: [BibEntry] = []
+    @Published public var isSearchingCrossRef: Bool = false
+    @Published public var selectedCitationStyle: CitationCommandStyle = .cite
+    @Published public var selectedBibliographyStyle: BibliographyStylePreset = .apa
+    @Published public var showCitationPickerPopover: Bool = false
+
+    // MARK: - Academic Templates & Paper Wizard State (v0.2.0)
+    @Published public var showPaperWizardSheet: Bool = false
+    @Published public var isBlindReviewEnabled: Bool = false
+    @Published public var isDoubleSpacedEnabled: Bool = false
+
+    // MARK: - Academic Stats, Rubric Targets & Student Mode (v0.2.0)
+    @Published public var academicStats: AcademicDocumentStats = AcademicDocumentStats()
+    @Published public var rubricTargets: RubricTargetConfig = RubricTargetConfig()
+    @Published public var preflightReport: AcademicPreflightReport = .empty
+    @Published public var demystifiedDiagnostics: [DemystifiedDiagnostic] = []
+
+    // MARK: - Spellcheck & Cursor-Accurate Insertion (v0.2.0)
+    @Published public var proseSpellCheckEnabled: Bool = false {
+        didSet {
+            userDefaults.set(proseSpellCheckEnabled, forKey: Self.proseSpellCheckEnabledKey)
+            refreshSpellingIssues()
+        }
+    }
+    @Published public var spellingIssues: [SpellingIssue] = []
+    @Published public var pendingEditorInsertion: EditorInsertionRequest?
+    @Published public var showFigureAssistantSheet: Bool = false
+    @Published public var pendingDroppedFigureURL: URL?
+
+    // MARK: - Spreadsheet Table & PGFPlots Chart State (v0.2.0)
+    @Published public var tableGridData: TableGridData = TableGridData()
+    @Published public var chartConfig: PGFPlotChartConfig = PGFPlotChartConfig()
+
+    // MARK: - Submission Export State (v0.2.0)
+    @Published public var isExportingSubmissionBundle: Bool = false
+    @Published public var submissionExportMessage: String?
+    @Published public var lastExportedZipURL: URL?
+
     private static let editorFontNameDefaultsKey = "LaTeXaP.editorFontName"
     private static let editorFontSizeDefaultsKey = "LaTeXaP.editorFontSize"
+    private static let rubricTargetsDefaultsKey = "LaTeXaP.rubricTargets"
+    private static let proseSpellCheckEnabledKey = "LaTeXaP.proseSpellCheckEnabled"
+    private static let ignoredSpellingWordsKey = "LaTeXaP.ignoredSpellingWords"
 
     private let tectonicService = TectonicService()
     private let fontLibraryService: FontLibraryService
     private let userDefaults: UserDefaults
+    public let tempFiguresDirectory: URL
     private var debounceTask: Task<Void, Never>?
     private var lastCompilerDiagnostics: [LaTeXDiagnostic] = []
+    private var lastRenderedPageCount: Int = 0
+    private var ignoredSpellingWords: Set<String> = []
 
     public init(
         initialTemplate: LaTeXTemplate = LaTeXCatalog.defaultTemplate,
         fontLibraryService: FontLibraryService = FontLibraryService(),
         userDefaults: UserDefaults = .standard,
+        tempFiguresDirectory: URL? = nil,
         compileOnInit: Bool = true
     ) {
         self.fontLibraryService = fontLibraryService
         self.userDefaults = userDefaults
+        if let tempFiguresDirectory {
+            self.tempFiguresDirectory = tempFiguresDirectory.standardizedFileURL
+        } else {
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
+            self.tempFiguresDirectory = appSupport
+                .appendingPathComponent("LaTeXaP", isDirectory: true)
+                .appendingPathComponent("TempFigures", isDirectory: true)
+                .standardizedFileURL
+        }
+        try? FileManager.default.createDirectory(at: self.tempFiguresDirectory, withIntermediateDirectories: true)
+
         self.sourceText = initialTemplate.content
         self.editorFontName = userDefaults.string(forKey: Self.editorFontNameDefaultsKey) ?? ""
         if userDefaults.object(forKey: Self.editorFontSizeDefaultsKey) != nil {
             let storedSize = userDefaults.double(forKey: Self.editorFontSizeDefaultsKey)
             self.editorFontSize = CGFloat(min(max(storedSize, 10.0), 24.0))
         }
+        if let rubricData = userDefaults.data(forKey: Self.rubricTargetsDefaultsKey),
+           let decodedRubric = try? JSONDecoder().decode(RubricTargetConfig.self, from: rubricData) {
+            self.rubricTargets = decodedRubric
+        }
+        self.proseSpellCheckEnabled = userDefaults.bool(forKey: Self.proseSpellCheckEnabledKey)
+        if let storedIgnored = userDefaults.stringArray(forKey: Self.ignoredSpellingWordsKey) {
+            self.ignoredSpellingWords = Set(storedIgnored)
+        }
+
         self.customFonts = fontLibraryService.registerAllStoredFonts()
         refreshDerivedMetadata()
         if compileOnInit {
@@ -167,11 +244,37 @@ public final class DocumentViewModel: ObservableObject {
 
     private func refreshDerivedMetadata() {
         outlineItems = OutlineParser.parse(source: sourceText)
-        bibEntries = BibliographyService.extractEntries(fromSource: sourceText)
+        bibEntries = BibliographyService.extractEntries(fromSource: sourceText, bibFileContent: managedBibContent)
         documentLabels = BibliographyService.extractLabels(from: sourceText)
         documentStats = Expl3Linter.computeStatistics(source: sourceText)
         staticLintWarnings = Expl3Linter.lint(source: sourceText)
         diagnostics = lastCompilerDiagnostics + staticLintWarnings
+        demystifiedDiagnostics = ContextSuggestionsEngine.demystify(diagnostics: diagnostics, source: sourceText)
+        academicStats = Expl3Linter.computeAcademicStatistics(
+            source: sourceText,
+            bibEntries: bibEntries,
+            pageCount: lastRenderedPageCount
+        )
+        preflightReport = AcademicPreflightService.analyze(
+            source: sourceText,
+            bibEntries: bibEntries,
+            diagnostics: diagnostics,
+            documentDirectory: currentFileURL?.deletingLastPathComponent(),
+            tempFiguresDirectory: tempFiguresDirectory,
+            stats: academicStats,
+            rubricTargets: rubricTargets
+        )
+        isBlindReviewEnabled = sourceText.contains("\\linenumbers")
+        isDoubleSpacedEnabled = sourceText.contains("\\doublespacing")
+        refreshSpellingIssues()
+    }
+
+    private func refreshSpellingIssues() {
+        guard proseSpellCheckEnabled else {
+            spellingIssues = []
+            return
+        }
+        spellingIssues = LaTeXSpellCheckService.scan(source: sourceText, ignoredWords: ignoredSpellingWords)
     }
 
     public func scheduleDebouncedCompilation() {
@@ -189,15 +292,28 @@ public final class DocumentViewModel: ObservableObject {
 
         let codeSnapshot = sourceText
         let docDir = currentFileURL?.deletingLastPathComponent()
+        var additionalTextFiles: [String: String] = [:]
+        let trimmedBib = managedBibContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedBib.isEmpty {
+            additionalTextFiles["references.bib"] = trimmedBib + "\n"
+        }
+
+        var assetDirs: [URL] = [tempFiguresDirectory]
+        if let docDir {
+            assetDirs.insert(docDir, at: 0)
+        }
 
         let result = await tectonicService.compile(
             source: codeSnapshot,
             documentDirectory: docDir,
-            fontDirectories: [fontLibraryService.fontsDirectory]
+            fontDirectories: [fontLibraryService.fontsDirectory],
+            additionalTextFiles: additionalTextFiles,
+            assetSearchDirectories: assetDirs
         )
 
         lastCompilerDiagnostics = result.diagnostics
         diagnostics = lastCompilerDiagnostics + staticLintWarnings
+        demystifiedDiagnostics = ContextSuggestionsEngine.demystify(diagnostics: diagnostics, source: sourceText)
         consoleLog = result.logOutput
 
         if result.success, let url = result.pdfURL {
@@ -205,8 +321,32 @@ public final class DocumentViewModel: ObservableObject {
             pdfRevision += 1
             synctexData = result.synctexData
             let pageCount = PDFDocument(url: url)?.pageCount ?? 1
+            lastRenderedPageCount = pageCount
+            academicStats = Expl3Linter.computeAcademicStatistics(
+                source: sourceText,
+                bibEntries: bibEntries,
+                pageCount: pageCount
+            )
+            preflightReport = AcademicPreflightService.analyze(
+                source: sourceText,
+                bibEntries: bibEntries,
+                diagnostics: diagnostics,
+                documentDirectory: docDir,
+                tempFiguresDirectory: tempFiguresDirectory,
+                stats: academicStats,
+                rubricTargets: rubricTargets
+            )
             compilationState = .success(durationMs: result.durationMs, pageCount: pageCount)
         } else {
+            preflightReport = AcademicPreflightService.analyze(
+                source: sourceText,
+                bibEntries: bibEntries,
+                diagnostics: diagnostics,
+                documentDirectory: docDir,
+                tempFiguresDirectory: tempFiguresDirectory,
+                stats: academicStats,
+                rubricTargets: rubricTargets
+            )
             let errCount = max(1, result.diagnostics.filter { $0.severity == .error }.count)
             compilationState = .failed(errorCount: errCount)
             showConsoleDrawer = true
@@ -229,6 +369,10 @@ public final class DocumentViewModel: ObservableObject {
 
     public func loadTemplate(_ template: LaTeXTemplate) {
         currentFileURL = nil
+        managedBibContent = ""
+        bibSearchResults = []
+        bibLookupError = nil
+        lastExportedZipURL = nil
         sourceText = template.content
         Task {
             await compileNow()
@@ -307,9 +451,13 @@ public final class DocumentViewModel: ObservableObject {
     }
 
     public func appendBibItemToSource(_ entry: BibEntry) {
+        let safeKey = AcademicSanitizer.sanitizeIdentifier(entry.key, fallback: "ref")
+        let safeAuthor = AcademicSanitizer.sanitizeExternalMetadata(entry.author, fallback: "Unknown Author")
+        let safeTitle = AcademicSanitizer.sanitizeExternalMetadata(entry.title, fallback: "Untitled")
+        let safeYear = AcademicSanitizer.sanitizeIdentifier(String(entry.year.prefix(4)), fallback: "2026")
         let formattedItem = """
-\\bibitem{\(entry.key)}
-\(entry.author), ``\(entry.title),'' \(entry.year).
+\\bibitem{\(safeKey)}
+\(safeAuthor), ``\(safeTitle),'' \(safeYear).
 """
         if let range = sourceText.range(of: "\\end{thebibliography}") {
             sourceText.replaceSubrange(range, with: "\(formattedItem)\n\\end{thebibliography}")
@@ -341,19 +489,28 @@ public final class DocumentViewModel: ObservableObject {
     }
 
     public func handleDroppedImageURL(_ url: URL) {
-        if let graphicxPreset = LaTeXCatalog.commonPackages.first(where: { $0.package == "graphicx" }) {
-            insertPackage(graphicxPreset)
+        guard let validatedURL = Self.validatedDroppedImageURL(url) else {
+            pendingDroppedFigureURL = nil
+            return
         }
-        let fileName = url.deletingPathExtension().lastPathComponent
-        let figureBlock = """
-\\begin{figure}[htbp]
-  \\centering
-  \\includegraphics[width=0.75\\textwidth]{\(url.path)}
-  \\caption{Caption for \(fileName.replacingOccurrences(of: "_", with: " ")).}
-  \\label{fig:\(fileName.lowercased())}
-\\end{figure}
-"""
-        insertRawBlock(figureBlock)
+        pendingDroppedFigureURL = validatedURL
+        showFigureAssistantSheet = true
+    }
+
+    public static func validatedDroppedImageURL(_ url: URL) -> URL? {
+        guard url.isFileURL else { return nil }
+        let standardized = url.standardizedFileURL
+        guard !isSymbolicLinkPath(standardized) else { return nil }
+        let ext = standardized.pathExtension.lowercased()
+        let allowedExts: Set<String> = ["png", "jpg", "jpeg", "pdf", "tiff", "tif"]
+        guard allowedExts.contains(ext) else { return nil }
+
+        let resolved = standardized.resolvingSymlinksInPath()
+        let values = try? resolved.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values?.isRegularFile == true, values?.isSymbolicLink != true else { return nil }
+        let size = Int64(values?.fileSize ?? 0)
+        guard size <= SubmissionExportService.maxAssetBytes else { return nil }
+        return resolved
     }
 
     // MARK: - File Operations (Open / Save / Export PDF)
@@ -364,17 +521,36 @@ public final class DocumentViewModel: ObservableObject {
         panel.allowedContentTypes = [UTType(filenameExtension: "tex") ?? .plainText, .plainText]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
-            if let loaded = try? String(contentsOf: url, encoding: .utf8) {
-                currentFileURL = url
-                sourceText = loaded
+            if loadDocumentFromDisk(at: url) {
                 Task { await compileNow() }
             }
         }
     }
 
+    @discardableResult
+    func loadDocumentFromDisk(at url: URL) -> Bool {
+        guard let loaded = try? String(contentsOf: url, encoding: .utf8) else {
+            return false
+        }
+        currentFileURL = url
+        bibSearchResults = []
+        bibLookupError = nil
+        lastExportedZipURL = nil
+        let docDir = url.deletingLastPathComponent()
+        let bibURL = docDir.appendingPathComponent("references.bib")
+        if !Self.isSymbolicLinkPath(bibURL),
+           let bibText = try? String(contentsOf: bibURL, encoding: .utf8) {
+            managedBibContent = bibText
+        } else {
+            managedBibContent = ""
+        }
+        sourceText = loaded
+        return true
+    }
+
     public func saveTexFile(saveAs: Bool = false) {
         if !saveAs, let existingURL = currentFileURL {
-            try? sourceText.write(to: existingURL, atomically: true, encoding: .utf8)
+            persistDocumentAndAssets(to: existingURL)
             return
         }
         let panel = NSSavePanel()
@@ -383,8 +559,67 @@ public final class DocumentViewModel: ObservableObject {
         panel.allowedContentTypes = [UTType(filenameExtension: "tex") ?? .plainText]
         if panel.runModal() == .OK, let url = panel.url {
             currentFileURL = url
-            try? sourceText.write(to: url, atomically: true, encoding: .utf8)
+            persistDocumentAndAssets(to: url)
         }
+    }
+
+    func persistDocumentAndAssets(to texURL: URL) {
+        guard texURL.isFileURL, !Self.isSymbolicLinkPath(texURL) else { return }
+        try? sourceText.write(to: texURL, atomically: true, encoding: .utf8)
+        let docDir = texURL.deletingLastPathComponent()
+        let fm = FileManager.default
+
+        // Sync references.bib beside saved .tex file when managedBibContent is non-empty
+        let trimmedBib = managedBibContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedBib.isEmpty {
+            let bibDest = docDir.appendingPathComponent("references.bib")
+            if !Self.isSymbolicLinkPath(bibDest) {
+                try? (trimmedBib + "\n").write(to: bibDest, atomically: true, encoding: .utf8)
+            }
+        }
+
+        // Migrate any TempFigures assets referenced in sourceText to <docDir>/figures/
+        let figureRefs = AcademicPreflightService.extractFigurePaths(from: sourceText)
+        guard !figureRefs.isEmpty else {
+            refreshDerivedMetadata()
+            return
+        }
+        let resolvedTempDir = tempFiguresDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let tempPrefix = resolvedTempDir.path.hasSuffix("/") ? resolvedTempDir.path : resolvedTempDir.path + "/"
+
+        if let docFiguresDir = Self.validatedContainedFiguresDirectory(in: docDir) {
+            let resolvedFigDir = docFiguresDir.resolvingSymlinksInPath()
+            let figPrefix = resolvedFigDir.path.hasSuffix("/") ? resolvedFigDir.path : resolvedFigDir.path + "/"
+
+            for ref in figureRefs where ref.path.hasPrefix("figures/") {
+                let leaf = String(ref.path.dropFirst("figures/".count))
+                guard let validLeaf = AcademicSanitizer.validatedRelativeAssetPath(leaf) else { continue }
+                let tempSrc = tempFiguresDirectory.appendingPathComponent(validLeaf).standardizedFileURL
+                guard !Self.isSymbolicLinkPath(tempSrc) else { continue }
+                let resolvedTempSrc = tempSrc.resolvingSymlinksInPath()
+                guard resolvedTempSrc.path.hasPrefix(tempPrefix) else { continue }
+                let srcVals = try? resolvedTempSrc.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+                guard srcVals?.isRegularFile == true,
+                      srcVals?.isSymbolicLink != true,
+                      Int64(srcVals?.fileSize ?? 0) <= SubmissionExportService.maxAssetBytes else {
+                    continue
+                }
+
+                let destURL = docFiguresDir.appendingPathComponent(validLeaf).standardizedFileURL
+                guard !Self.isSymbolicLinkPath(destURL) else { continue }
+                let destParent = destURL.deletingLastPathComponent()
+                let resolvedParent = destParent.resolvingSymlinksInPath()
+                guard resolvedParent.path == resolvedFigDir.path || resolvedParent.path.hasPrefix(figPrefix) else {
+                    continue
+                }
+                if fm.fileExists(atPath: resolvedTempSrc.path), !fm.fileExists(atPath: destURL.path) {
+                    try? fm.createDirectory(at: destParent, withIntermediateDirectories: true)
+                    guard !Self.isSymbolicLinkPath(destParent) else { continue }
+                    try? fm.copyItem(at: resolvedTempSrc, to: destURL)
+                }
+            }
+        }
+        refreshDerivedMetadata()
     }
 
     public func exportPDF() {
@@ -676,5 +911,442 @@ public final class DocumentViewModel: ObservableObject {
         }
         lines.insert(declaration, at: min(insertAt, updatedPreambleEnd))
         sourceText = lines.joined(separator: "\n")
+    }
+
+    // MARK: - Academic Paper Authoring Suite Actions (v0.2.0)
+
+    public func searchCrossRefCitations() {
+        let query = bibLookupQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        isSearchingCrossRef = true
+        isFetchingBib = true
+        bibLookupError = nil
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                self.isSearchingCrossRef = false
+                self.isFetchingBib = false
+            }
+            do {
+                let results = try await BibliographyService.smartLookup(query: query)
+                self.bibSearchResults = results
+                // If user pasted a direct DOI / arXiv / ISBN / URL yielding 1 exact entry, import automatically
+                let isDirectID = query.lowercased().hasPrefix("10.") ||
+                    query.lowercased().contains("doi.org/") ||
+                    query.lowercased().contains("arxiv.org/") ||
+                    query.lowercased().hasPrefix("arxiv:") ||
+                    query.range(of: #"^\d{4}\.\d{4,5}"#, options: .regularExpression) != nil ||
+                    BibliographyService.extractValidISBN(from: query) != nil
+                if isDirectID, let first = results.first {
+                    self.importBibEntry(first, intoBibFile: true)
+                    self.bibLookupQuery = ""
+                }
+            } catch {
+                self.bibLookupError = error.localizedDescription
+            }
+        }
+    }
+
+    public func importBibEntry(_ entry: BibEntry, intoBibFile: Bool = true) {
+        if intoBibFile {
+            let existing = (try? BibliographyService.parseBibContent(managedBibContent, strict: false)) ?? []
+            if let existingSame = existing.first(where: { $0.key == entry.key && $0.title.caseInsensitiveCompare(entry.title) == .orderedSame }) {
+                _ = existingSame
+                return
+            }
+            let outcome = BibliographyService.mergeEntries(
+                [entry],
+                intoExistingBibContent: managedBibContent,
+                replaceDuplicates: false
+            )
+            managedBibContent = outcome.mergedContent
+            if let docDir = currentFileURL?.deletingLastPathComponent(),
+               !Self.isSymbolicLinkPath(docDir) {
+                let bibURL = docDir.appendingPathComponent("references.bib")
+                if !Self.isSymbolicLinkPath(bibURL) {
+                    try? managedBibContent.write(to: bibURL, atomically: true, encoding: .utf8)
+                }
+            }
+        } else {
+            appendBibItemToSource(entry)
+        }
+    }
+
+    public func importBibFileViaPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import BibTeX Library (.bib)"
+        let bibTypes: [UTType] = [UTType(filenameExtension: "bib") ?? .plainText, .plainText]
+        panel.allowedContentTypes = bibTypes
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let url = panel.url {
+            handleDroppedBibFileURL(url)
+        }
+    }
+
+    public func handleDroppedBibFileURL(_ url: URL) {
+        bibLookupError = nil
+        do {
+            let imported = try BibliographyService.parseBibFile(at: url)
+            guard !imported.isEmpty else {
+                bibLookupError = "No BibTeX entries were found in '\(url.lastPathComponent)'."
+                return
+            }
+            let outcome = BibliographyService.mergeEntries(
+                imported,
+                intoExistingBibContent: managedBibContent,
+                replaceDuplicates: false
+            )
+            managedBibContent = outcome.mergedContent
+            if let docDir = currentFileURL?.deletingLastPathComponent(),
+               !Self.isSymbolicLinkPath(docDir) {
+                let bibURL = docDir.appendingPathComponent("references.bib")
+                if !Self.isSymbolicLinkPath(bibURL) {
+                    try? managedBibContent.write(to: bibURL, atomically: true, encoding: .utf8)
+                }
+            }
+        } catch {
+            bibLookupError = error.localizedDescription
+        }
+    }
+
+    public func insertFormattedCitation(_ entry: BibEntry, style: CitationCommandStyle, pageLocator: String?) {
+        selectedCitationStyle = style
+        // Ensure entry exists in bibliography library if not already present inline or in managed .bib
+        if !bibEntries.contains(where: { $0.key == entry.key }) {
+            importBibEntry(entry, intoBibFile: true)
+        }
+        let formatted = style.format(key: entry.key, pageLocator: pageLocator)
+        insertTextAtCaret(formatted)
+    }
+
+    public func applyBibliographyStyle(_ style: BibliographyStylePreset) {
+        selectedBibliographyStyle = style
+        var updated = sourceText
+        let styleOpt = style.biblatexStyleOption
+        let desiredPkg = "\\usepackage[style=\(styleOpt),backend=bibtex]{biblatex}"
+
+        if let bibRegex = try? NSRegularExpression(pattern: #"\\usepackage(?:\[[^\]]*\])?\{biblatex\}"#) {
+            let ns = updated as NSString
+            if bibRegex.firstMatch(in: updated, range: NSRange(location: 0, length: ns.length)) != nil {
+                updated = bibRegex.stringByReplacingMatches(
+                    in: updated,
+                    range: NSRange(location: 0, length: ns.length),
+                    withTemplate: NSRegularExpression.escapedTemplate(for: desiredPkg)
+                )
+            } else if let beginDocRange = updated.range(of: "\\begin{document}") {
+                updated.insert(contentsOf: "\(desiredPkg)\n\\addbibresource{references.bib}\n", at: beginDocRange.lowerBound)
+            } else {
+                updated = "\(desiredPkg)\n\\addbibresource{references.bib}\n" + updated
+            }
+        }
+
+        if !updated.contains("\\addbibresource"), let beginDocRange = updated.range(of: "\\begin{document}") {
+            updated.insert(contentsOf: "\\addbibresource{references.bib}\n", at: beginDocRange.lowerBound)
+        }
+        if !updated.contains("\\printbibliography") && !updated.contains("\\bibliography{") && !updated.contains("\\begin{thebibliography}"),
+           let endDocRange = updated.range(of: "\\end{document}") {
+            updated.replaceSubrange(endDocRange, with: "\n\\printbibliography\n\n\\end{document}")
+        }
+
+        sourceText = updated
+    }
+
+    public func applyPaperSetupWizard(_ config: PaperSetupConfig) {
+        currentFileURL = nil
+        selectedBibliographyStyle = config.bibliographyStyle
+        isDoubleSpacedEnabled = config.doubleSpacing
+        isBlindReviewEnabled = config.anonymizedBlindReview
+        sourceText = LaTeXCatalog.generateWizardDocument(from: config)
+        if autoCompileEnabled {
+            Task { await compileNow() }
+        }
+    }
+
+    public func toggleBlindReview(_ enabled: Bool) {
+        isBlindReviewEnabled = enabled
+        if enabled {
+            sourceText = SubmissionExportService.applyBlindReviewTransform(to: sourceText)
+        } else {
+            var lines = sourceText.components(separatedBy: .newlines)
+            lines.removeAll { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return trimmed == "\\linenumbers" || trimmed == "\\usepackage{lineno}"
+            }
+            sourceText = lines.joined(separator: "\n")
+        }
+    }
+
+    public func toggleDoubleSpacing(_ enabled: Bool) {
+        isDoubleSpacedEnabled = enabled
+        var updated = sourceText
+        if enabled {
+            if let setspacePreset = LaTeXCatalog.commonPackages.first(where: { $0.package == "setspace" }) {
+                if !updated.contains("\\usepackage{setspace}") {
+                    var lines = updated.components(separatedBy: .newlines)
+                    if let docIdx = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("\\documentclass") }) {
+                        lines.insert(setspacePreset.usepackageStatement, at: docIdx + 1)
+                        updated = lines.joined(separator: "\n")
+                    } else {
+                        updated = setspacePreset.usepackageStatement + "\n" + updated
+                    }
+                }
+            }
+            if !updated.contains("\\doublespacing") {
+                if let beginDoc = updated.range(of: "\\begin{document}") {
+                    updated.insert(contentsOf: "\\doublespacing\n", at: beginDoc.lowerBound)
+                } else {
+                    updated += "\n\\doublespacing"
+                }
+            }
+        } else {
+            var lines = updated.components(separatedBy: .newlines)
+            lines.removeAll { $0.trimmingCharacters(in: .whitespaces) == "\\doublespacing" }
+            updated = lines.joined(separator: "\n")
+        }
+        sourceText = updated
+    }
+
+    public func updateRubricTargets(_ targets: RubricTargetConfig) {
+        rubricTargets = targets
+        if let encoded = try? JSONEncoder().encode(targets) {
+            userDefaults.set(encoded, forKey: Self.rubricTargetsDefaultsKey)
+        }
+        refreshDerivedMetadata()
+    }
+
+    public func applyAcademicFix(_ op: AcademicFixOperation) {
+        switch op {
+        case .replaceLine(let lineNumber, let originalSubstring, let replacement):
+            var lines = sourceText.components(separatedBy: .newlines)
+            let idx = lineNumber - 1
+            guard idx >= 0, idx < lines.count else { return }
+            if let range = lines[idx].range(of: originalSubstring) {
+                lines[idx].replaceSubrange(range, with: replacement)
+                sourceText = lines.joined(separator: "\n")
+            }
+
+        case .insertPackage(let packageName, let options):
+            let cleanPkg = AcademicSanitizer.sanitizeIdentifier(packageName, fallback: "")
+            guard !cleanPkg.isEmpty else { return }
+            let alreadyLoaded = sourceText.range(
+                of: #"\\usepackage(?:\[[^\]]*\])?\{[^}]*\b"# + NSRegularExpression.escapedPattern(for: cleanPkg) + #"\b[^}]*\}"#,
+                options: .regularExpression
+            ) != nil
+            guard !alreadyLoaded else { return }
+
+            let stmt = options.isEmpty ? "\\usepackage{\(cleanPkg)}" : "\\usepackage[\(options)]{\(cleanPkg)}"
+            var lines = sourceText.components(separatedBy: .newlines)
+            if let docIdx = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("\\documentclass") }) {
+                lines.insert(stmt, at: docIdx + 1)
+                if cleanPkg == "pgfplots" && !sourceText.contains("\\pgfplotsset") {
+                    lines.insert("\\pgfplotsset{compat=1.18}", at: docIdx + 2)
+                }
+                sourceText = lines.joined(separator: "\n")
+            } else {
+                sourceText = stmt + "\n" + sourceText
+            }
+
+        case .wrapLineInMath(let lineNumber):
+            var lines = sourceText.components(separatedBy: .newlines)
+            let idx = lineNumber - 1
+            guard idx >= 0, idx < lines.count else { return }
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.contains("$") else { return }
+            let leadingWS = String(lines[idx].prefix(while: { $0 == " " || $0 == "\t" }))
+            lines[idx] = "\(leadingWS)$\(trimmed)$"
+            sourceText = lines.joined(separator: "\n")
+
+        case .appendMissingBrace(let lineNumber):
+            var lines = sourceText.components(separatedBy: .newlines)
+            let idx = lineNumber - 1
+            guard idx >= 0, idx < lines.count else { return }
+            lines[idx] += "}"
+            sourceText = lines.joined(separator: "\n")
+
+        case .insertRawSnippet(let snippet):
+            insertTextAtCaret(snippet)
+        }
+    }
+
+    public func applySpellingSuggestion(_ issue: SpellingIssue, replacement: String) {
+        let nsSource = sourceText as NSString
+        guard issue.nsRange.location != NSNotFound,
+              issue.nsRange.location + issue.nsRange.length <= nsSource.length else {
+            return
+        }
+        let currentSlice = nsSource.substring(with: issue.nsRange)
+        guard currentSlice == issue.word else {
+            refreshSpellingIssues()
+            return
+        }
+        sourceText = nsSource.replacingCharacters(in: issue.nsRange, with: replacement)
+    }
+
+    public func ignoreSpellingWord(_ word: String) {
+        let normalized = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        ignoredSpellingWords.insert(normalized)
+        userDefaults.set(Array(ignoredSpellingWords).sorted(), forKey: Self.ignoredSpellingWordsKey)
+        refreshSpellingIssues()
+    }
+
+    public func insertTextAtCaret(_ text: String, backtrackOffset: Int = 0) {
+        pendingEditorInsertion = EditorInsertionRequest(text: text, cursorBacktrackOffset: backtrackOffset)
+    }
+
+    public func insertFigureWithConfig(sourceURL: URL, secondaryURL: URL?, config: FigureInsertConfig) {
+        guard let primaryRel = copyImageAssetToProjectFigures(from: sourceURL) else {
+            return
+        }
+        var updatedConfig = config
+        updatedConfig.primaryRelativePath = primaryRel
+
+        if let secondaryURL {
+            if let secondaryRel = copyImageAssetToProjectFigures(from: secondaryURL) {
+                updatedConfig.secondaryRelativePath = secondaryRel
+            }
+        } else {
+            updatedConfig.secondaryRelativePath = nil
+        }
+
+        applyAcademicFix(.insertPackage(packageName: "graphicx", options: ""))
+        if updatedConfig.secondaryRelativePath != nil {
+            applyAcademicFix(.insertPackage(packageName: "subcaption", options: ""))
+        }
+
+        let snippet = AcademicToolsGenerator.generateFigureSnippet(from: updatedConfig)
+        insertTextAtCaret(snippet)
+    }
+
+    public func insertSpreadsheetTable() {
+        applyAcademicFix(.insertPackage(packageName: "booktabs", options: ""))
+        let latex = AcademicToolsGenerator.generateBooktabsTable(from: tableGridData)
+        insertTextAtCaret(latex)
+    }
+
+    public func insertPGFPlotChart() {
+        applyAcademicFix(.insertPackage(packageName: "pgfplots", options: ""))
+        let latex = AcademicToolsGenerator.generatePGFPlotChart(from: chartConfig)
+        insertTextAtCaret(latex)
+    }
+
+    public func exportSubmissionBundle(stripComments: Bool = false, anonymize: Bool = false) {
+        let panel = NSSavePanel()
+        panel.title = "Export Clean Submission Bundle (.zip)"
+        let baseName = currentFileURL?.deletingPathExtension().lastPathComponent ?? "paper"
+        panel.nameFieldStringValue = "\(baseName)-submission.zip"
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let destURL = panel.url else {
+            return
+        }
+
+        isExportingSubmissionBundle = true
+        submissionExportMessage = nil
+        lastExportedZipURL = nil
+        let sourceSnapshot = sourceText
+        let mainName = currentFileURL?.lastPathComponent ?? "main.tex"
+        let bibSnapshot = managedBibContent
+        let docDir = currentFileURL?.deletingLastPathComponent()
+        let tempFigs = tempFiguresDirectory
+        let fontsSnapshot = customFonts
+        let fontDir = fontLibraryService.fontsDirectory
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isExportingSubmissionBundle = false }
+            do {
+                let result = try await SubmissionExportService.exportBundle(
+                    source: sourceSnapshot,
+                    mainFileName: mainName,
+                    destinationZipURL: destURL,
+                    managedBibContent: bibSnapshot,
+                    documentDirectory: docDir,
+                    tempFiguresDirectory: tempFigs,
+                    customFonts: fontsSnapshot,
+                    fontLibraryDirectory: fontDir,
+                    stripComments: stripComments,
+                    anonymize: anonymize,
+                    verifyCompileWithTectonic: true
+                )
+                self.lastExportedZipURL = result.zipURL
+                let warningNote = result.preflightWarnings.isEmpty ? "" : " (\(result.preflightWarnings.count) warning(s))"
+                self.submissionExportMessage = "Exported \(result.includedFiles.count) file(s) to '\(result.zipURL.lastPathComponent)'\(warningNote)."
+            } catch {
+                self.submissionExportMessage = "Export failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    // MARK: - Private Asset Staging Helper
+
+    private static func isSymbolicLinkPath(_ url: URL) -> Bool {
+        let std = url.standardizedFileURL
+        if let vals = try? std.resourceValues(forKeys: [.isSymbolicLinkKey]), vals.isSymbolicLink == true {
+            return true
+        }
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: std.path),
+           (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+            return true
+        }
+        return false
+    }
+
+    static func validatedContainedFiguresDirectory(in docDir: URL) -> URL? {
+        guard docDir.isFileURL, !isSymbolicLinkPath(docDir) else { return nil }
+        let fm = FileManager.default
+        let resolvedDocDir = docDir.standardizedFileURL.resolvingSymlinksInPath()
+        let figuresDir = docDir.appendingPathComponent("figures", isDirectory: true).standardizedFileURL
+        guard !isSymbolicLinkPath(figuresDir) else { return nil }
+
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: figuresDir.path, isDirectory: &isDir) {
+            guard isDir.boolValue else { return nil }
+        } else {
+            do {
+                try fm.createDirectory(at: figuresDir, withIntermediateDirectories: true)
+            } catch {
+                return nil
+            }
+        }
+
+        guard !isSymbolicLinkPath(figuresDir) else { return nil }
+        let resolvedFigures = figuresDir.resolvingSymlinksInPath()
+        let prefix = resolvedDocDir.path.hasSuffix("/") ? resolvedDocDir.path : resolvedDocDir.path + "/"
+        guard resolvedFigures.path.hasPrefix(prefix) else { return nil }
+        return figuresDir
+    }
+
+    func copyImageAssetToProjectFigures(from sourceURL: URL) -> String? {
+        guard let resolved = Self.validatedDroppedImageURL(sourceURL) else { return nil }
+
+        let safeLeaf = AcademicSanitizer.sanitizeFigureFileName(resolved.lastPathComponent)
+        let targetDir: URL
+        if let docDir = currentFileURL?.deletingLastPathComponent() {
+            guard let safeDocFigs = Self.validatedContainedFiguresDirectory(in: docDir) else {
+                return nil
+            }
+            targetDir = safeDocFigs
+        } else {
+            guard !Self.isSymbolicLinkPath(tempFiguresDirectory) else { return nil }
+            try? FileManager.default.createDirectory(at: tempFiguresDirectory, withIntermediateDirectories: true)
+            targetDir = tempFiguresDirectory
+        }
+
+        let destURL = targetDir.appendingPathComponent(safeLeaf).standardizedFileURL
+        guard !Self.isSymbolicLinkPath(destURL) else { return nil }
+        let resolvedTarget = targetDir.resolvingSymlinksInPath()
+        let resolvedDestParent = destURL.deletingLastPathComponent().resolvingSymlinksInPath()
+        guard resolvedDestParent.path == resolvedTarget.path else { return nil }
+
+        if resolved != destURL.resolvingSymlinksInPath() {
+            try? FileManager.default.removeItem(at: destURL)
+            do {
+                try FileManager.default.copyItem(at: resolved, to: destURL)
+            } catch {
+                return nil
+            }
+        }
+        return "figures/\(safeLeaf)"
     }
 }

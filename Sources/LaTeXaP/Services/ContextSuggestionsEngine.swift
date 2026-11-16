@@ -339,6 +339,245 @@ Write your content here.
         return (contextBadge: contextBadge, items: items)
     }
 
+    // MARK: - Plain-English Error Demystifier (v0.2.0 Academic Suite)
+
+    public static func demystify(
+        diagnostics: [LaTeXDiagnostic],
+        source: String
+    ) -> [DemystifiedDiagnostic] {
+        let lines = source.components(separatedBy: .newlines)
+        var results: [DemystifiedDiagnostic] = []
+        var seenIDs = Set<String>()
+
+        func lineText(at lineNumber: Int?) -> String? {
+            guard let n = lineNumber, n >= 1, n <= lines.count else { return nil }
+            return lines[n - 1]
+        }
+
+        func hasPackage(_ pkg: String) -> Bool {
+            source.range(
+                of: #"\\usepackage(?:\[[^\]]*\])?\{[^}]*\b"# + NSRegularExpression.escapedPattern(for: pkg) + #"\b[^}]*\}"#,
+                options: .regularExpression
+            ) != nil
+        }
+
+        for (index, diag) in diagnostics.enumerated() {
+            let msg = diag.message
+            let lower = msg.lowercased()
+            let currentLine = lineText(at: diag.line)
+            let itemID = "\(diag.severity.rawValue)-\(diag.line ?? 0)-\(index)-\(msg.prefix(32))"
+            guard seenIDs.insert(itemID).inserted else { continue }
+
+            // 1. Misplaced alignment tab `&`
+            if lower.contains("misplaced alignment tab character &") {
+                var fixTitle: String?
+                var fixOp: AcademicFixOperation?
+                if let n = diag.line, let text = currentLine, text.contains("&"), !text.contains("\\&") {
+                    let fixed = text.replacingOccurrences(of: "&", with: "\\&")
+                    fixTitle = "Escape & → \\&"
+                    fixOp = .replaceLine(lineNumber: n, originalSubstring: text, replacement: fixed)
+                }
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Unescaped '&' character in body text",
+                        explanation: "In LaTeX, '&' aligns columns inside tables and equations. Write '\\&' whenever you want a literal ampersand in prose or titles.",
+                        rawMessage: msg,
+                        fixButtonTitle: fixTitle,
+                        fixOperation: fixOp
+                    )
+                )
+                continue
+            }
+
+            // 2. Missing `$` inserted (often caused by unescaped `_`, `^`, `\alpha`, `\frac`, etc.)
+            if lower.contains("missing $ inserted") || lower.contains("extra }, or forgotten $") {
+                var fixTitle: String?
+                var fixOp: AcademicFixOperation?
+                if let n = diag.line, let text = currentLine {
+                    if text.contains("_") && !text.contains("\\_") && !text.contains("$") {
+                        let fixed = text.replacingOccurrences(of: "_", with: "\\_")
+                        fixTitle = "Escape _ → \\_"
+                        fixOp = .replaceLine(lineNumber: n, originalSubstring: text, replacement: fixed)
+                    } else if !text.contains("$") && !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                        fixTitle = "Wrap line in $...$"
+                        fixOp = .wrapLineInMath(lineNumber: n)
+                    }
+                }
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Math symbol used outside $...$ math mode",
+                        explanation: "Subscripts (_), superscripts (^), and math macros (\\alpha, \\frac) must either be wrapped in $...$ or escaped (like \\_).",
+                        rawMessage: msg,
+                        fixButtonTitle: fixTitle,
+                        fixOperation: fixOp
+                    )
+                )
+                continue
+            }
+
+            // 3. Undefined control sequence -> detect common missing packages
+            if lower.contains("undefined control sequence") {
+                let targetText = (currentLine ?? "") + "\n" + msg
+                var pkgToSuggest: (pkg: String, opts: String, label: String)?
+                if (targetText.contains("\\qty") || targetText.contains("\\num") || targetText.contains("\\unit")) && !hasPackage("siunitx") {
+                    pkgToSuggest = ("siunitx", "", "Add \\usepackage{siunitx}")
+                } else if targetText.contains("\\includegraphics") && !hasPackage("graphicx") {
+                    pkgToSuggest = ("graphicx", "", "Add \\usepackage{graphicx}")
+                } else if (targetText.contains("\\toprule") || targetText.contains("\\midrule") || targetText.contains("\\bottomrule")) && !hasPackage("booktabs") {
+                    pkgToSuggest = ("booktabs", "", "Add \\usepackage{booktabs}")
+                } else if (targetText.contains("\\parencite") || targetText.contains("\\textcite") || targetText.contains("\\autocite") || targetText.contains("\\footcite") || targetText.contains("\\printbibliography")) && !hasPackage("biblatex") {
+                    pkgToSuggest = ("biblatex", "style=authoryear,backend=bibtex", "Add \\usepackage{biblatex}")
+                } else if (targetText.contains("\\mathbb") || targetText.contains("\\mathfrak")) && !hasPackage("amssymb") {
+                    pkgToSuggest = ("amssymb", "", "Add \\usepackage{amssymb}")
+                } else if (targetText.contains("\\text") || targetText.contains("\\dfrac") || targetText.contains("\\eqref")) && !hasPackage("amsmath") {
+                    pkgToSuggest = ("amsmath", "", "Add \\usepackage{amsmath}")
+                } else if (targetText.contains("\\setmainfont") || targetText.contains("\\setsansfont") || targetText.contains("\\setmonofont") || targetText.contains("\\newfontfamily")) && !hasPackage("fontspec") {
+                    pkgToSuggest = ("fontspec", "", "Add \\usepackage{fontspec}")
+                } else if targetText.contains("\\ce{") && !hasPackage("mhchem") {
+                    pkgToSuggest = ("mhchem", "version=4", "Add \\usepackage{mhchem}")
+                } else if (targetText.contains("\\addplot") || targetText.contains("\\pgfplotsset")) && !hasPackage("pgfplots") {
+                    pkgToSuggest = ("pgfplots", "", "Add \\usepackage{pgfplots}")
+                }
+
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: pkgToSuggest != nil ? "Command requires missing package '\(pkgToSuggest!.pkg)'" : "Unrecognized LaTeX command",
+                        explanation: pkgToSuggest != nil
+                            ? "This command is provided by the '\(pkgToSuggest!.pkg)' package, which is not loaded in your preamble yet."
+                            : "TeX encountered a command it doesn't recognize. Check spelling, ensure required packages are loaded, or wrap expl3 commands inside \\ExplSyntaxOn.",
+                        rawMessage: msg,
+                        fixButtonTitle: pkgToSuggest?.label,
+                        fixOperation: pkgToSuggest.map { .insertPackage(packageName: $0.pkg, options: $0.opts) }
+                    )
+                )
+                continue
+            }
+
+            // 4. Environment undefined
+            if lower.contains("environment") && lower.contains("undefined") {
+                var pkg: (String, String)?
+                if msg.contains("align") || msg.contains("gather") || msg.contains("multline") {
+                    pkg = ("amsmath", "")
+                } else if msg.contains("theorem") || msg.contains("proof") || msg.contains("lemma") {
+                    pkg = ("amsthm", "")
+                } else if msg.contains("tikzpicture") {
+                    pkg = ("tikz", "")
+                } else if msg.contains("axis") {
+                    pkg = ("pgfplots", "")
+                } else if msg.contains("subfigure") {
+                    pkg = ("subcaption", "")
+                } else if msg.contains("lstlisting") {
+                    pkg = ("listings", "")
+                }
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Missing package for LaTeX environment",
+                        explanation: pkg != nil
+                            ? "The environment on this line belongs to the '\(pkg!.0)' package."
+                            : "The \\begin{...} environment is not defined in the current document class or packages.",
+                        rawMessage: msg,
+                        fixButtonTitle: pkg.map { "Add \\usepackage{\($0.0)}" },
+                        fixOperation: pkg.map { .insertPackage(packageName: $0.0, options: $0.1) }
+                    )
+                )
+                continue
+            }
+
+            // 5. Runaway argument / unclosed brace
+            if lower.contains("runaway argument") || lower.contains("paragraph ended before") {
+                let lineNum = diag.line
+                let canAppend = lineNum.flatMap { lineText(at: $0) } != nil
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Unclosed curly brace '{' in command argument",
+                        explanation: "A command like \\textbf{ or \\caption{ is missing its closing '}' brace.",
+                        rawMessage: msg,
+                        fixButtonTitle: canAppend ? "Append missing '}'" : nil,
+                        fixOperation: lineNum.map { .appendMissingBrace(lineNumber: $0) }
+                    )
+                )
+                continue
+            }
+
+            // 6. Fontspec error
+            if msg.contains("Package fontspec Error") || (msg.contains("Font") && lower.contains("cannot be found")) {
+                let missingPkg = !hasPackage("fontspec")
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Custom font not found by XeTeX",
+                        explanation: "Open the Font Manager (⇧⌘F) to check the imported font filename or system family name, and verify \\usepackage{fontspec} is loaded.",
+                        rawMessage: msg,
+                        fixButtonTitle: missingPkg ? "Add \\usepackage{fontspec}" : nil,
+                        fixOperation: missingPkg ? .insertPackage(packageName: "fontspec", options: "") : nil
+                    )
+                )
+                continue
+            }
+
+            // 7. File not found (figures, .bib, .sty)
+            if lower.contains("file `") && lower.contains("not found") {
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Referenced image or file not found",
+                        explanation: "Verify the file is placed inside your relative figures/ folder or imported into your bibliography, and check spelling.",
+                        rawMessage: msg
+                    )
+                )
+                continue
+            }
+
+            // 8. Overfull \hbox
+            if msg.hasPrefix("Overfull \\hbox") {
+                results.append(
+                    DemystifiedDiagnostic(
+                        id: itemID,
+                        line: diag.line,
+                        severity: diag.severity,
+                        shortTitle: "Line extends slightly past the page margin",
+                        explanation: "A long word, URL (wrap in \\url{...}), or wide table exceeded the column width. Consider rephrasing or adjusting table column widths.",
+                        rawMessage: msg
+                    )
+                )
+                continue
+            }
+
+            // 9. Fallback plain-English card
+            results.append(
+                DemystifiedDiagnostic(
+                    id: itemID,
+                    line: diag.line,
+                    severity: diag.severity,
+                    shortTitle: diag.severity == .error ? "LaTeX compilation error" : (diag.severity == .warning ? "LaTeX warning" : "Typesetting note"),
+                    explanation: msg,
+                    rawMessage: msg
+                )
+            )
+        }
+
+        return results
+    }
+
     private static func countOccurrences(of target: String, in text: String) -> Int {
         guard !target.isEmpty else { return 0 }
         return text.components(separatedBy: target).count - 1

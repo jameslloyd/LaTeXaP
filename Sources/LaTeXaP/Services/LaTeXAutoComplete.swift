@@ -418,6 +418,62 @@ public enum LaTeXAutoCompleteEngine {
             detail: "Insert bibliographic citation",
             insertText: "\\cite{|}"
         ),
+        LaTeXCompletionItem(
+            trigger: "\\parencite",
+            signature: "[page]{bibkey}",
+            category: "biblatex",
+            detail: "Insert parenthetical citation e.g. (Author, 2024)",
+            insertText: "\\parencite{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\textcite",
+            signature: "[page]{bibkey}",
+            category: "biblatex",
+            detail: "Insert narrative in-text citation e.g. Author (2024)",
+            insertText: "\\textcite{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\autocite",
+            signature: "[page]{bibkey}",
+            category: "biblatex",
+            detail: "Style-aware automatic citation (biblatex)",
+            insertText: "\\autocite{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\footcite",
+            signature: "[page]{bibkey}",
+            category: "biblatex",
+            detail: "Insert footnote bibliographic citation (biblatex)",
+            insertText: "\\footcite{|}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\begin{axis}",
+            signature: "... \\end{axis}",
+            category: "pgfplots",
+            detail: "PGFPlots data visualization axis environment",
+            insertText: "\\begin{axis}[\n  xlabel={x},\n  ylabel={y},\n  grid=major\n]\n  \\addplot+[thick, mark=*] coordinates { | };\n\\end{axis}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\begin{subfigure}",
+            signature: "[b]{0.48\\textwidth} ... \\end{subfigure}",
+            category: "subcaption",
+            detail: "Side-by-side subfigure container (subcaption)",
+            insertText: "\\begin{subfigure}[b]{0.48\\textwidth}\n  \\centering\n  \\includegraphics[width=\\linewidth]{|}\n  \\caption{Subcaption}\n\\end{subfigure}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\qty",
+            signature: "{value}{unit}",
+            category: "siunitx",
+            detail: "Typeset quantity with physical unit (siunitx)",
+            insertText: "\\qty{|}{m/s^2}"
+        ),
+        LaTeXCompletionItem(
+            trigger: "\\num",
+            signature: "{number}",
+            category: "siunitx",
+            detail: "Format scientific notation number (siunitx)",
+            insertText: "\\num{|}"
+        ),
 
         // --- Environments (Full Line Auto-Expand) ---
         LaTeXCompletionItem(
@@ -805,7 +861,9 @@ public enum LaTeXAutoCompleteEngine {
         ("lstlisting", "Python / Source code listing", "[language=Python, frame=single]\n|\n"),
         ("python", "Python syntax-highlighted block (pythonhighlight)", "\n|\n"),
         ("pycode", "PythonTeX executable block", "\n|\n"),
-        ("algorithm", "Algorithmic pseudocode block (algorithm2e)", "[H]\n  \\SetAlgoLined\n  |\n  \\caption{Algorithm}\n")
+        ("algorithm", "Algorithmic pseudocode block (algorithm2e)", "[H]\n  \\SetAlgoLined\n  |\n  \\caption{Algorithm}\n"),
+        ("axis", "PGFPlots chart axis (pgfplots)", "[\n  xlabel={x},\n  ylabel={y},\n  grid=major\n]\n  |\n"),
+        ("subfigure", "Side-by-side subfigure (subcaption)", "[b]{0.48\\textwidth}\n  \\centering\n  |\n  \\caption{}\n")
     ]
 
     /// Inspects the line up to `cursorLocation` to determine if an autocomplete query is active.
@@ -848,7 +906,7 @@ public enum LaTeXAutoCompleteEngine {
 
         // Case 1: Cursor is inside \begin{prefix, \end{prefix, \usepackage{prefix, \cite{prefix, or \ref{prefix
         if let braceMatch = linePrefix.range(
-            of: #"\\(begin|end|usepackage|cite|citep|citet|parencite|ref|eqref|cref)(?:\[[^\]]*\])?\{([a-zA-Z0-9_*:.-]*)$"#,
+            of: #"\\(begin|end|usepackage|cite|citep|citet|parencite|textcite|autocite|footcite|ref|eqref|cref|Cref)(?:\[[^\]]*\])*\{([a-zA-Z0-9_*:.-]*)$"#,
             options: .regularExpression
         ) {
             let matchedSub = String(linePrefix[braceMatch])
@@ -910,7 +968,8 @@ public enum LaTeXAutoCompleteEngine {
     public static func suggestions(
         for query: CompletionQueryContext,
         in source: String,
-        customFonts: [CustomFontRecord] = []
+        customFonts: [CustomFontRecord] = [],
+        bibEntries additionalBibEntries: [BibEntry] = []
     ) -> [LaTeXCompletionItem] {
         // 0. Inside \setmainfont{...}, \setsansfont{...}, \setmonofont{...}, \newfontfamily{\cmd}{...}
         if query.enclosingCommand == "font" {
@@ -951,11 +1010,16 @@ public enum LaTeXAutoCompleteEngine {
                 }
         }
 
-        // 1b. Inside \cite{...}, \citep{...}, \citet{...}
+        // 1b. Inside \cite{...}, \parencite{...}, \textcite{...}, \autocite{...}, \footcite{...}
         if query.enclosingCommand == "cite" {
             let filter = query.prefix.lowercased()
-            let entries = BibliographyService.extractEntries(fromSource: source)
-            return entries
+            let sourceEntries = BibliographyService.extractEntries(fromSource: source)
+            var combined = additionalBibEntries
+            var seenKeys = Set(additionalBibEntries.map(\.key))
+            for entry in sourceEntries where seenKeys.insert(entry.key).inserted {
+                combined.append(entry)
+            }
+            return combined
                 .filter { filter.isEmpty || $0.key.lowercased().contains(filter) || $0.title.lowercased().contains(filter) }
                 .map { entry in
                     LaTeXCompletionItem(

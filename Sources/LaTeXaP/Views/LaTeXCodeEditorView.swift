@@ -537,9 +537,24 @@ public final class AutoCompletePopupController: NSObject, NSTableViewDataSource,
 
 // MARK: - Custom NSTextView withInline Ghost Text & Auto-Pair
 
+@MainActor
+private final class SpellingMenuPayload: NSObject {
+    let issue: SpellingIssue
+    let replacement: String?
+
+    init(issue: SpellingIssue, replacement: String?) {
+        self.issue = issue
+        self.replacement = replacement
+    }
+}
+
 public final class LaTeXEditorTextView: NSTextView {
     public var onDropImageFile: ((URL) -> Void)?
     public var onDropFontFiles: (([URL]) -> Void)?
+    public var onDropBibFile: ((URL) -> Void)?
+    public var activeSpellingIssues: [SpellingIssue] = []
+    public var onApplySpellingFix: ((SpellingIssue, String) -> Void)?
+    public var onIgnoreSpellingWord: ((String) -> Void)?
     public var editorFontSize: CGFloat = 13.5 {
         didSet {
             if oldValue != editorFontSize {
@@ -585,6 +600,10 @@ public final class LaTeXEditorTextView: NSTextView {
             }
             if let first = fileURLs.first {
                 let ext = first.pathExtension.lowercased()
+                if ext == "bib" {
+                    onDropBibFile?(first)
+                    return true
+                }
                 if ["png", "jpg", "jpeg", "pdf", "tiff"].contains(ext) {
                     onDropImageFile?(first)
                     return true
@@ -592,6 +611,61 @@ public final class LaTeXEditorTextView: NSTextView {
             }
         }
         return super.performDragOperation(sender)
+    }
+
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let baseMenu = super.menu(for: event) ?? NSMenu()
+        guard !activeSpellingIssues.isEmpty else { return baseMenu }
+
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        let charIndex = characterIndexForInsertion(at: viewPoint)
+        guard let issue = activeSpellingIssues.first(where: { NSLocationInRange(charIndex, $0.nsRange) }) else {
+            return baseMenu
+        }
+
+        var itemsToPrepend: [NSMenuItem] = []
+        if issue.suggestions.isEmpty {
+            let noneItem = NSMenuItem(title: "No Spelling Suggestions", action: nil, keyEquivalent: "")
+            noneItem.isEnabled = false
+            itemsToPrepend.append(noneItem)
+        } else {
+            for suggestion in issue.suggestions.prefix(5) {
+                let item = NSMenuItem(
+                    title: "Replace with “\(suggestion)”",
+                    action: #selector(handleApplySpellingSuggestion(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = SpellingMenuPayload(issue: issue, replacement: suggestion)
+                itemsToPrepend.append(item)
+            }
+        }
+
+        let ignoreItem = NSMenuItem(
+            title: "Ignore “\(issue.word)”",
+            action: #selector(handleIgnoreSpellingWord(_:)),
+            keyEquivalent: ""
+        )
+        ignoreItem.target = self
+        ignoreItem.representedObject = SpellingMenuPayload(issue: issue, replacement: nil)
+        itemsToPrepend.append(ignoreItem)
+        itemsToPrepend.append(NSMenuItem.separator())
+
+        for (idx, item) in itemsToPrepend.enumerated() {
+            baseMenu.insertItem(item, at: idx)
+        }
+        return baseMenu
+    }
+
+    @objc private func handleApplySpellingSuggestion(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? SpellingMenuPayload,
+              let replacement = payload.replacement else { return }
+        onApplySpellingFix?(payload.issue, replacement)
+    }
+
+    @objc private func handleIgnoreSpellingWord(_ sender: NSMenuItem) {
+        guard let payload = sender.representedObject as? SpellingMenuPayload else { return }
+        onIgnoreSpellingWord?(payload.issue.word)
     }
 
     public override func drawBackground(in rect: NSRect) {
@@ -679,36 +753,57 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
     @Binding public var text: String
     @Binding public var cursorLine: Int
     @Binding public var jumpToLineRequest: Int?
+    @Binding public var pendingInsertion: EditorInsertionRequest?
     public var diagnostics: [LaTeXDiagnostic]
     public var fontSize: CGFloat
     public var fontName: String
     public var customFonts: [CustomFontRecord]
+    public var bibEntries: [BibEntry]
+    public var spellingIssues: [SpellingIssue]
+    public var spellCheckEnabled: Bool
     public var lightBackground: Bool
     public var onDropImageFile: ((URL) -> Void)?
     public var onDropFontFiles: (([URL]) -> Void)?
+    public var onDropBibFile: ((URL) -> Void)?
+    public var onApplySpellingFix: ((SpellingIssue, String) -> Void)?
+    public var onIgnoreSpellingWord: ((String) -> Void)?
 
     public init(
         text: Binding<String>,
         cursorLine: Binding<Int>,
         jumpToLineRequest: Binding<Int?>,
+        pendingInsertion: Binding<EditorInsertionRequest?> = .constant(nil),
         diagnostics: [LaTeXDiagnostic],
         fontSize: CGFloat = 13.5,
         fontName: String = "",
         customFonts: [CustomFontRecord] = [],
+        bibEntries: [BibEntry] = [],
+        spellingIssues: [SpellingIssue] = [],
+        spellCheckEnabled: Bool = false,
         lightBackground: Bool = true,
         onDropImageFile: ((URL) -> Void)? = nil,
-        onDropFontFiles: (([URL]) -> Void)? = nil
+        onDropFontFiles: (([URL]) -> Void)? = nil,
+        onDropBibFile: ((URL) -> Void)? = nil,
+        onApplySpellingFix: ((SpellingIssue, String) -> Void)? = nil,
+        onIgnoreSpellingWord: ((String) -> Void)? = nil
     ) {
         self._text = text
         self._cursorLine = cursorLine
         self._jumpToLineRequest = jumpToLineRequest
+        self._pendingInsertion = pendingInsertion
         self.diagnostics = diagnostics
         self.fontSize = fontSize
         self.fontName = fontName
         self.customFonts = customFonts
+        self.bibEntries = bibEntries
+        self.spellingIssues = spellingIssues
+        self.spellCheckEnabled = spellCheckEnabled
         self.lightBackground = lightBackground
         self.onDropImageFile = onDropImageFile
         self.onDropFontFiles = onDropFontFiles
+        self.onDropBibFile = onDropBibFile
+        self.onApplySpellingFix = onApplySpellingFix
+        self.onIgnoreSpellingWord = onIgnoreSpellingWord
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -770,6 +865,9 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onDropImageFile = onDropImageFile
         textView.onDropFontFiles = onDropFontFiles
+        textView.onDropBibFile = onDropBibFile
+        textView.onApplySpellingFix = onApplySpellingFix
+        textView.onIgnoreSpellingWord = onIgnoreSpellingWord
         textView.editorFontSize = fontSize
         textView.editorFontName = fontName
 
@@ -817,6 +915,9 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
 
         textView.onDropImageFile = onDropImageFile
         textView.onDropFontFiles = onDropFontFiles
+        textView.onDropBibFile = onDropBibFile
+        textView.onApplySpellingFix = onApplySpellingFix
+        textView.onIgnoreSpellingWord = onIgnoreSpellingWord
 
         let themeOrFontChanged = (context.coordinator.lastLightBackground != lightBackground) ||
                                  (context.coordinator.lastFontSize != fontSize) ||
@@ -832,9 +933,34 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         }
 
         if (textView.string != text && !context.coordinator.isEditingText) || themeOrFontChanged {
+            let oldText = textView.string
             let selectedRanges = textView.selectedRanges
-            if textView.string != text {
+            let adjustedRanges: [NSValue]
+            if oldText != text {
+                let oldNS = oldText as NSString
+                let newNS = text as NSString
+                let delta = newNS.length - oldNS.length
+                let commonPrefixLen = (oldText.commonPrefix(with: text) as NSString).length
+                adjustedRanges = selectedRanges.map { value in
+                    let r = value.rangeValue
+                    if delta != 0,
+                       r.location >= commonPrefixLen,
+                       r.location + r.length <= oldNS.length,
+                       r.location + delta >= 0,
+                       r.location + r.length + delta <= newNS.length {
+                        let oldSuffix = oldNS.substring(from: r.location)
+                        let newSuffix = newNS.substring(from: r.location + delta)
+                        if oldSuffix == newSuffix {
+                            return NSValue(range: NSRange(location: r.location + delta, length: r.length))
+                        }
+                    }
+                    let clampedLoc = min(max(0, r.location), newNS.length)
+                    let clampedLen = min(r.length, newNS.length - clampedLoc)
+                    return NSValue(range: NSRange(location: clampedLoc, length: clampedLen))
+                }
                 textView.string = text
+            } else {
+                adjustedRanges = selectedRanges
             }
             LaTeXSyntaxHighlighter.shared.highlight(
                 textStorage: textStorage,
@@ -842,12 +968,23 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
                 fontName: fontName,
                 lightBackground: lightBackground
             )
-            textView.selectedRanges = selectedRanges
+            textView.selectedRanges = adjustedRanges
             textView.needsDisplay = true
             context.coordinator.gutterView?.needsDisplay = true
         }
 
+        context.coordinator.updateSpellingOverlays(
+            issues: spellCheckEnabled ? spellingIssues : []
+        )
         context.coordinator.updateDiagnostics(diagnostics)
+
+        if let request = pendingInsertion, context.coordinator.lastHandledInsertionID != request.id {
+            context.coordinator.lastHandledInsertionID = request.id
+            DispatchQueue.main.async {
+                context.coordinator.performCaretInsertion(request)
+                self.pendingInsertion = nil
+            }
+        }
 
         if let targetLine = jumpToLineRequest {
             DispatchQueue.main.async {
@@ -866,6 +1003,7 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
         var lastFontSize: CGFloat = 13.5
         var lastFontName: String = ""
         var lastLightBackground: Bool = true
+        var lastHandledInsertionID: UUID?
 
         let popupController = AutoCompletePopupController()
         var activeQuery: CompletionQueryContext?
@@ -971,7 +1109,8 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
             let suggestions = LaTeXAutoCompleteEngine.suggestions(
                 for: query,
                 in: source,
-                customFonts: parent.customFonts
+                customFonts: parent.customFonts,
+                bibEntries: parent.bibEntries
             )
             guard !suggestions.isEmpty else {
                 dismissAutoComplete()
@@ -1093,6 +1232,61 @@ public struct LaTeXCodeEditorView: NSViewRepresentable {
                 }
             }
             gutterView?.currentCursorLine = line
+        }
+
+        func updateSpellingOverlays(issues: [SpellingIssue]) {
+            guard let textView = textView,
+                  let layoutManager = textView.layoutManager else { return }
+            let length = (textView.string as NSString).length
+            let fullRange = NSRange(location: 0, length: length)
+            if length > 0 {
+                layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: fullRange)
+                layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: fullRange)
+            }
+            textView.activeSpellingIssues = issues
+            let underlineVal = NSUnderlineStyle.single.rawValue | NSUnderlineStyle.patternDot.rawValue
+            for issue in issues {
+                guard issue.nsRange.location >= 0,
+                      NSMaxRange(issue.nsRange) <= length else { continue }
+                layoutManager.addTemporaryAttributes([
+                    .underlineStyle: underlineVal,
+                    .underlineColor: NSColor.systemRed
+                ], forCharacterRange: issue.nsRange)
+            }
+        }
+
+        func performCaretInsertion(_ request: EditorInsertionRequest) {
+            guard let textView = textView,
+                  let textStorage = textView.textStorage else { return }
+            let sel = textView.selectedRange()
+            let length = (textView.string as NSString).length
+            let safeRange = NSRange(
+                location: min(sel.location, length),
+                length: min(sel.length, max(0, length - min(sel.location, length)))
+            )
+            if textView.shouldChangeText(in: safeRange, replacementString: request.text) {
+                isEditingText = true
+                textStorage.replaceCharacters(in: safeRange, with: request.text)
+                textView.didChangeText()
+
+                let insertedLength = (request.text as NSString).length
+                let newLength = (textView.string as NSString).length
+                let targetCaret = max(0, min(newLength, safeRange.location + insertedLength - request.cursorBacktrackOffset))
+                textView.setSelectedRange(NSRange(location: targetCaret, length: 0))
+
+                parent.text = textView.string
+                LaTeXSyntaxHighlighter.shared.highlight(
+                    textStorage: textStorage,
+                    fontSize: parent.fontSize,
+                    fontName: parent.fontName,
+                    lightBackground: parent.lightBackground
+                )
+                updateCursorLine()
+                textView.scrollRangeToVisible(NSRange(location: targetCaret, length: 0))
+                textView.needsDisplay = true
+                gutterView?.needsDisplay = true
+                isEditingText = false
+            }
         }
 
         func updateDiagnostics(_ diagnostics: [LaTeXDiagnostic]) {
