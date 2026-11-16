@@ -87,7 +87,7 @@ struct LaTeXaPApp: App {
                     AppMetadata.showAboutPanel()
                 }
                 Button("Check for Updates...") {
-                    viewModel.checkForUpdatesSilently()
+                    viewModel.checkForUpdatesInteractively()
                 }
                 Button("GitHub Repository (jameslloyd/LaTeXaP)...") {
                     NSWorkspace.shared.open(AppMetadata.repoURL)
@@ -99,7 +99,7 @@ struct LaTeXaPApp: App {
                     AppMetadata.showAboutPanel()
                 }
                 Button("Check for Updates...") {
-                    viewModel.checkForUpdatesSilently()
+                    viewModel.checkForUpdatesInteractively()
                 }
                 Divider()
                 Button("LaTeXaP on GitHub (https://github.com/jameslloyd/LaTeXaP.git)") {

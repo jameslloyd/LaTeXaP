@@ -126,6 +126,45 @@ public final class DocumentViewModel: ObservableObject {
         }
     }
 
+    public func checkForUpdatesInteractively() {
+        Task { [weak self] in
+            guard let self else { return }
+            let status = await UpdateCheckerService.checkForUpdateInteractive(currentVersion: AppMetadata.version)
+            let alert = NSAlert()
+            switch status {
+            case .updateAvailable(let update):
+                self.availableUpdate = update
+                alert.alertStyle = .informational
+                alert.messageText = "LaTeXaP v\(update.latestVersion) is Available"
+                alert.informativeText = "You are currently running LaTeXaP v\(AppMetadata.version). Release \(update.tagName) is available on GitHub."
+                alert.addButton(withTitle: "Download Update")
+                alert.addButton(withTitle: "Later")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(update.htmlURL)
+                }
+            case .upToDate(let current, let latestTag):
+                alert.alertStyle = .informational
+                alert.messageText = "You're Up to Date"
+                if let latestTag {
+                    alert.informativeText = "LaTeXaP v\(current) is the latest available version (\(latestTag))."
+                } else {
+                    alert.informativeText = "LaTeXaP v\(current) is the latest available version."
+                }
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            case .failed(let message):
+                alert.alertStyle = .warning
+                alert.messageText = "Unable to Check for Updates"
+                alert.informativeText = message
+                alert.addButton(withTitle: "Open GitHub Releases")
+                alert.addButton(withTitle: "OK")
+                if alert.runModal() == .alertFirstButtonReturn {
+                    NSWorkspace.shared.open(UpdateCheckerService.releasesPageURL)
+                }
+            }
+        }
+    }
+
     private func refreshDerivedMetadata() {
         outlineItems = OutlineParser.parse(source: sourceText)
         bibEntries = BibliographyService.extractEntries(fromSource: sourceText)

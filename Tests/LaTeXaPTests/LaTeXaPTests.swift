@@ -251,6 +251,26 @@ struct LaTeXaPTests {
 
         let noUpdate = UpdateCheckerService.parseReleaseJSON(data: sampleReleaseJSON, currentVersion: "0.2.0")
         #expect(noUpdate == nil)
+
+        let upToDateStatus = UpdateCheckerService.evaluateReleaseJSON(data: sampleReleaseJSON, currentVersion: "0.2.0")
+        #expect(upToDateStatus == .upToDate(currentVersion: "0.2.0", latestTag: "v0.2.0"))
+
+        let availableStatus = UpdateCheckerService.evaluateReleaseJSON(data: sampleReleaseJSON, currentVersion: "0.1.1")
+        if case .updateAvailable(let found) = availableStatus {
+            #expect(found.latestVersion == "0.2.0")
+            #expect(found.tagName == "v0.2.0")
+        } else {
+            Issue.record("Expected updateAvailable status")
+        }
+
+        let draftJSON = """
+        {
+          "tag_name": "v0.3.0",
+          "html_url": "https://github.com/jameslloyd/LaTeXaP/releases/tag/v0.3.0",
+          "draft": true
+        }
+        """.data(using: .utf8)!
+        #expect(UpdateCheckerService.evaluateReleaseJSON(data: draftJSON, currentVersion: "0.1.2") == .upToDate(currentVersion: "0.1.2", latestTag: nil))
     }
 
     // MARK: - Custom Fonts Tests
