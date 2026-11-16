@@ -57,13 +57,25 @@
 
 ## Installation
 
-### Option 1: Install Prebuilt macOS App (Recommended)
-1. **Download**: Grab the latest `LaTeXaP-v0.1.1-macOS.zip` archive from [**GitHub Releases**](https://github.com/jameslloyd/LaTeXaP/releases).
-2. **Unzip**: Double-click `LaTeXaP-v0.1.1-macOS.zip` in Finder (or run `unzip LaTeXaP-v0.1.1-macOS.zip`) to extract **`LaTeXaP.app`**.
+### Option 1: Install Latest Release via Terminal (Recommended — No Gatekeeper Prompt)
+Run these commands in Terminal to download the latest release directly from GitHub into `/Applications` and launch **LaTeXaP**:
+
+```bash
+curl -fsSL -o /tmp/LaTeXaP.zip https://github.com/jameslloyd/LaTeXaP/releases/latest/download/LaTeXaP-macOS.zip
+ditto -x -k /tmp/LaTeXaP.zip /Applications
+xattr -cr /Applications/LaTeXaP.app
+rm -f /tmp/LaTeXaP.zip
+open /Applications/LaTeXaP.app
+```
+
+> *Note*: The `.app` bundle includes a standalone, self-contained **Tectonic** typesetting engine — no separate TeX Live, MacTeX, or Homebrew installation is required.
+
+### Option 2: Download from GitHub Releases (Browser)
+1. **Download**: Grab the latest `LaTeXaP-macOS.zip` archive from [**GitHub Releases**](https://github.com/jameslloyd/LaTeXaP/releases/latest).
+2. **Unzip**: Double-click `LaTeXaP-macOS.zip` in Finder to extract **`LaTeXaP.app`**.
 3. **Move to Applications**: Drag **`LaTeXaP.app`** into your **`/Applications`** folder.
 4. **Launch**: Open **LaTeXaP** from `/Applications` or Spotlight (`⌘Space`).
-   - *Note*: The `.app` bundle includes the embedded **Tectonic** typesetting engine, so no separate TeX Live or MacTeX installation is required.
-   - *macOS Gatekeeper tip*: Because the release binary is ad-hoc signed, if macOS prompts that the developer cannot be verified on first launch, **Right-Click (or Control-Click) `LaTeXaP.app` → Open**, or run:
+   - *macOS Gatekeeper tip*: Because the release binary is ad-hoc signed (not notarized with a paid Apple Developer ID), macOS may show *"Apple could not verify LaTeXaP"* when downloaded through a web browser. Either click **Open Anyway** in **System Settings → Privacy & Security**, or strip the browser quarantine attribute in Terminal:
      ```bash
      xattr -cr /Applications/LaTeXaP.app
      ```
