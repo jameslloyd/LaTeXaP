@@ -2,6 +2,18 @@
 
 All notable changes to **LaTeXaP** are documented in this file.
 
+## [0.3.2] — 2026-11-17
+
+### Added & Improved
+- **Clear Active State for Auto-Compile ("Automatically compile PDF as you type")**:
+  - Replaced the toolbar toggle with a high-contrast `Auto-Compile: ON / OFF` capsule button (`autoCompileToolbarButton`) featuring a live green status dot, green `bolt.fill` icon, and green-bordered capsule when active.
+  - Added a matching interactive **Auto-Compile Active / Paused** status badge in the **Live PDF Preview** header bar and persisted `autoCompileEnabled` in `UserDefaults`, automatically triggering compilation when re-enabled.
+- **Editing Pane Light & Dark Theme Switcher**:
+  - Added a non-wrapping **☀️ Light | 🌙 Dark** segmented pill control (`editorThemeSegmentedControl`) directly in the LaTeX editing pane header bar, a dedicated **Light Theme / Dark Theme** selector and live-themed preview inside the **Editor Typography** popover (`EditorFontPopoverView`), and **View → Editing Pane Theme** menu controls, persisted via `UserDefaults`.
+- Bumped application version to `0.3.2` (Build `7`) across `AppMetadata` (`LaTeXaPApp.swift`), `scripts/package_app.sh`, and documentation, and published updated macOS `.app` release archives (`LaTeXaP-v0.3.2-macOS.zip` and `LaTeXaP-macOS.zip`).
+
+---
+
 ## [0.3.1] — 2026-11-17
 
 ### Changed

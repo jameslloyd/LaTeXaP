@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Native Swift &amp; SwiftUI Studio for Authoring LaTeX3 (<code>expl3</code> + <code>xparse</code>) Documents with Live Tectonic Rendering &amp; Bidirectional SyncTeX</strong><br/>
-  <sub>Latest Release: <strong>v0.3.1</strong> (Build 6) • macOS 14.0+ • Embedded Tectonic 0.17.0</sub>
+  <sub>Latest Release: <strong>v0.3.2</strong> (Build 7) • macOS 14.0+ • Embedded Tectonic 0.17.0</sub>
 </p>
 
 ---
