@@ -70,9 +70,9 @@ cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.3.0</string>
+    <string>0.3.1</string>
     <key>CFBundleVersion</key>
-    <string>5</string>
+    <string>6</string>
     <key>NSHumanReadableCopyright</key>
     <string>https://github.com/jameslloyd/LaTeXaP.git</string>
     <key>LSMinimumSystemVersion</key>
@@ -94,7 +94,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 touch "$APP_DIR"
 echo "Created macOS application bundle at: $APP_DIR"
 
-ZIP_PATH="$PROJECT_DIR/build/LaTeXaP-v0.3.0-macOS.zip"
+ZIP_PATH="$PROJECT_DIR/build/LaTeXaP-v0.3.1-macOS.zip"
 LATEST_ZIP_PATH="$PROJECT_DIR/build/LaTeXaP-macOS.zip"
 rm -f "$ZIP_PATH" "$LATEST_ZIP_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_PATH"

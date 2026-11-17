@@ -6,8 +6,8 @@ extension Notification.Name {
 }
 
 enum AppMetadata {
-    static let version = "0.3.0"
-    static let build = "5"
+    static let version = "0.3.1"
+    static let build = "6"
     static let repoURLString = "https://github.com/jameslloyd/LaTeXaP"
     static let repoGitURLString = "https://github.com/jameslloyd/LaTeXaP.git"
     static let repoURL = URL(string: "https://github.com/jameslloyd/LaTeXaP")!

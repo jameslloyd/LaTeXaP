@@ -2,6 +2,13 @@
 
 All notable changes to **LaTeXaP** are documented in this file.
 
+## [0.3.1] — 2026-11-17
+
+### Changed
+- Bumped application version to `0.3.1` (Build `6`) across `AppMetadata` (`LaTeXaPApp.swift`), `scripts/package_app.sh`, and documentation, and published updated macOS `.app` release archives (`LaTeXaP-v0.3.1-macOS.zip` and `LaTeXaP-macOS.zip`).
+
+---
+
 ## [0.3.0] — 2026-11-17
 
 ### Added — GitHub Repository Multi-Project Storage
