@@ -1491,4 +1491,586 @@ struct LaTeXaPTests {
         #expect(verifiedExport.compiledCleanly)
         #expect(verifiedExport.includedFiles.contains("figures/v1.0/plot.png"))
     }
+
+    // MARK: - v0.3.0 GitHub Repository Multi-Project Storage Tests
+
+    @Test func gitHubWorkspaceModelsValidationAndAPIParsing() throws {
+        // 1. Default human-readable commit message & newline sanitization
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 11
+        comps.day = 17
+        comps.hour = 14
+        comps.minute = 25
+        let fixedDate = Calendar(identifier: .gregorian).date(from: comps)!
+        let commitMsg = GitHubWorkspaceValidator.defaultCommitMessage(projectName: "CS229\nFinal Paper", at: fixedDate)
+        #expect(commitMsg == "Update CS229 Final Paper — 2026-11-17 14:25")
+
+        // 2. Slug validation & slugification
+        #expect(GitHubWorkspaceValidator.slugifyProjectName("CS229 Final Paper!") == "cs229-final-paper")
+        #expect(GitHubWorkspaceValidator.slugifyProjectName("   ---   ") == "untitled-project")
+        #expect(GitHubWorkspaceValidator.isValidProjectSlug("cs229-final-paper"))
+        #expect(!GitHubWorkspaceValidator.isValidProjectSlug("../evil"))
+        #expect(!GitHubWorkspaceValidator.isValidProjectSlug("-leading"))
+        #expect(!GitHubWorkspaceValidator.isValidProjectSlug("UpperCase"))
+        #expect(!GitHubWorkspaceValidator.isValidProjectSlug(""))
+        #expect(!GitHubWorkspaceValidator.isValidProjectSlug(String(repeating: "a", count: 65)))
+
+        // 3. Branch & commit SHA allowlists
+        #expect(GitHubWorkspaceValidator.validatedBranchName("main") == "main")
+        #expect(GitHubWorkspaceValidator.validatedBranchName("paper/draft-2") == "paper/draft-2")
+        #expect(GitHubWorkspaceValidator.validatedBranchName("-evil") == nil)
+        #expect(GitHubWorkspaceValidator.validatedBranchName("main..evil") == nil)
+        #expect(GitHubWorkspaceValidator.validatedBranchName("main@{1}") == nil)
+        #expect(GitHubWorkspaceValidator.validatedCommitSHA("a1b2c3d") == "a1b2c3d")
+        #expect(GitHubWorkspaceValidator.validatedCommitSHA("abc") == nil)
+        #expect(GitHubWorkspaceValidator.validatedCommitSHA("zzzzzzz") == nil)
+
+        // 4. Remote URL allowlist in production mode
+        let httpsParsed = GitHubWorkspaceValidator.parseAndValidateRemoteURL("https://github.com/octocat/research-papers")
+        #expect(httpsParsed?.owner == "octocat")
+        #expect(httpsParsed?.repo == "research-papers")
+        #expect(httpsParsed?.normalizedURL == "https://github.com/octocat/research-papers.git")
+        #expect(httpsParsed?.suggestedAuth == .personalAccessToken)
+
+        let sshParsed = GitHubWorkspaceValidator.parseAndValidateRemoteURL("git@github.com:octocat/research-papers.git")
+        #expect(sshParsed?.normalizedURL == "git@github.com:octocat/research-papers.git")
+        #expect(sshParsed?.suggestedAuth == .sshKey)
+
+        let shortParsed = GitHubWorkspaceValidator.parseAndValidateRemoteURL("octocat/research-papers")
+        #expect(shortParsed?.normalizedURL == "https://github.com/octocat/research-papers.git")
+
+        let dangerousRemotes = [
+            "file:///etc/passwd",
+            "/tmp/local.git",
+            "ext::sh -c id",
+            "fd::0",
+            "http://github.com/octocat/papers.git",
+            "https://user:secret@github.com/octocat/papers.git",
+            "https://evil.com/octocat/papers.git",
+            "octocat/../etc"
+        ]
+        for bad in dangerousRemotes {
+            #expect(GitHubWorkspaceValidator.parseAndValidateRemoteURL(bad) == nil, "Expected remote URL to be rejected: \(bad)")
+        }
+
+        // 5. Token redaction & .gitignore generation
+        let redacted = GitHubWorkspaceValidator.redactSensitiveToken(
+            "fatal: could not read from https://ghp_supersecret123@github.com/a/b.git token ghp_supersecret123",
+            token: "ghp_supersecret123"
+        )
+        #expect(!redacted.contains("ghp_supersecret123"))
+        #expect(redacted.contains("[REDACTED]"))
+
+        let ignoreNoPDF = GitHubWorkspaceValidator.laTeXGitIgnore(includePDFs: false)
+        #expect(ignoreNoPDF.contains("*.aux"))
+        #expect(ignoreNoPDF.contains("*.pdf"))
+        let ignoreWithPDF = GitHubWorkspaceValidator.laTeXGitIgnore(includePDFs: true)
+        #expect(ignoreWithPDF.contains("*.aux"))
+        #expect(!ignoreWithPDF.contains("*.pdf"))
+
+        // 6. GitHubAPIService JSON parsing
+        let userJSON = Data(#"{"login":"academic-dev","name":"Jane Scholar"}"#.utf8)
+        let parsedUser = try GitHubAPIService.parseAuthenticatedUserJSON(userJSON)
+        #expect(parsedUser.login == "academic-dev")
+        #expect(parsedUser.name == "Jane Scholar")
+
+        let reposJSON = Data(#"""
+        [
+          {
+            "id": 42,
+            "name": "latex-papers",
+            "full_name": "academic-dev/latex-papers",
+            "clone_url": "https://github.com/academic-dev/latex-papers.git",
+            "ssh_url": "git@github.com:academic-dev/latex-papers.git",
+            "default_branch": "main",
+            "private": true,
+            "updated_at": "2026-11-17T12:00:00Z",
+            "owner": {"login": "academic-dev"}
+          }
+        ]
+        """#.utf8)
+        let parsedRepos = try GitHubAPIService.parseRepositoriesJSON(reposJSON)
+        #expect(parsedRepos.count == 1)
+        #expect(parsedRepos.first?.isPrivate == true)
+        #expect(parsedRepos.first?.fullName == "academic-dev/latex-papers")
+
+        // 7. InMemoryGitCredentialStore CRUD
+        let memCreds = InMemoryGitCredentialStore(cliToken: "gho_cli_test")
+        try memCreds.saveToken("ghp_abc", forAccount: "academic-dev/latex-papers")
+        #expect(memCreds.loadToken(forAccount: "academic-dev/latex-papers") == "ghp_abc")
+        #expect(memCreds.detectGitHubCLIToken() == "gho_cli_test")
+        try memCreds.deleteToken(forAccount: "academic-dev/latex-papers")
+        #expect(memCreds.loadToken(forAccount: "academic-dev/latex-papers") == nil)
+
+        // 8. Git output parsers
+        let porcelain = """
+         M projects/paper-1/main.tex
+        ?? projects/paper-1/figures/fig1.png
+        UU projects/paper-1/references.bib
+        """
+        let changes = GitRepositoryService.parsePorcelainStatus(porcelain)
+        #expect(changes.count == 3)
+        #expect(changes[0].status == "M")
+        #expect(changes[1].status == "A")
+        #expect(changes[2].status == "U")
+
+        let logSample = "\u{1e}0123456789abcdef0123456789abcdef01234567\u{1f}0123456\u{1f}Jane\u{1f}1763389500\u{1f}Update Paper — 2026-11-17\nprojects/paper-1/main.tex\n"
+        let parsedLog = GitRepositoryService.parseGitLogOutput(logSample, unpushedSHAs: ["0123456789abcdef0123456789abcdef01234567"])
+        #expect(parsedLog.count == 1)
+        #expect(parsedLog[0].shortHash == "0123456")
+        #expect(parsedLog[0].isPushed == false)
+        #expect(parsedLog[0].changedFiles == ["projects/paper-1/main.tex"])
+    }
+
+    @Test func gitRepositoryServiceSecurityAndGuards() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPGitSec-\(UUID().uuidString)", isDirectory: true)
+        let reposRoot = tempRoot.appendingPathComponent("Repos", isDirectory: true)
+        let repoDir = reposRoot.appendingPathComponent("local-test", isDirectory: true)
+        let projectDir = repoDir.appendingPathComponent("projects/demo-paper", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let outsideSecret = tempRoot.appendingPathComponent("secret.txt")
+        try "SECRET".write(to: outsideSecret, atomically: true, encoding: .utf8)
+
+        let prodService = GitRepositoryService(
+            repositoriesRootDirectory: reposRoot,
+            credentialStore: InMemoryGitCredentialStore()
+        )
+        // Production service refuses local/file remotes
+        #expect(await prodService.parseRemoteURL("file:///tmp/repo.git") == nil)
+        #expect(await prodService.parseRemoteURL("/tmp/repo.git") == nil)
+
+        let connection = GitHubRepoConnection(
+            owner: "local",
+            repoName: "test",
+            remoteURLString: tempRoot.appendingPathComponent("bare.git").path,
+            branch: "main",
+            authMethod: .sshKey,
+            localFolderName: "local-test"
+        )
+        let proj = AcademicProjectDescriptor(slug: "demo-paper", displayName: "Demo Paper")
+
+        // 1. Symlink inside project blocks commitProjectChanges before staging
+        let symInProject = projectDir.appendingPathComponent("escape.tex")
+        try FileManager.default.createSymbolicLink(at: symInProject, withDestinationURL: outsideSecret)
+        do {
+            _ = try await prodService.commitProjectChanges(
+                in: repoDir,
+                connection: connection,
+                project: proj,
+                message: "Attempt symlink",
+                pushAfterCommit: false,
+                token: nil
+            )
+            Issue.record("Expected securityViolation for symlink inside project")
+        } catch let err as GitStorageError {
+            if case .securityViolation = err {
+                // Expected
+            } else {
+                Issue.record("Unexpected error: \(err)")
+            }
+        }
+        try? FileManager.default.removeItem(at: symInProject)
+
+        // 2. Oversized file (> 50 MB) is blocked before git add
+        let hugeFile = projectDir.appendingPathComponent("huge-dataset.bin")
+        FileManager.default.createFile(atPath: hugeFile.path, contents: nil)
+        let fh = try FileHandle(forWritingTo: hugeFile)
+        try fh.truncate(atOffset: 51 * 1024 * 1024)
+        try fh.close()
+        do {
+            _ = try await prodService.commitProjectChanges(
+                in: repoDir,
+                connection: connection,
+                project: proj,
+                message: "Attempt oversized file",
+                pushAfterCommit: false,
+                token: nil
+            )
+            Issue.record("Expected fileSizeExceedsGitHubLimit error")
+        } catch let err as GitStorageError {
+            if case .fileSizeExceedsGitHubLimit = err {
+                // Expected
+            } else {
+                Issue.record("Unexpected error: \(err)")
+            }
+        }
+        try? FileManager.default.removeItem(at: hugeFile)
+
+        // 3. Import loose .tex file rejects path traversal and symlinks
+        let linkTeX = repoDir.appendingPathComponent("link-paper.tex")
+        try FileManager.default.createSymbolicLink(at: linkTeX, withDestinationURL: outsideSecret)
+        await #expect(throws: GitStorageError.self) {
+            _ = try await prodService.importLooseTeXFileIntoProject(
+                in: repoDir,
+                connection: connection,
+                relativeTeXPath: "../secret.txt",
+                displayName: "Bad",
+                token: nil
+            )
+        }
+        await #expect(throws: GitStorageError.self) {
+            _ = try await prodService.importLooseTeXFileIntoProject(
+                in: repoDir,
+                connection: connection,
+                relativeTeXPath: "link-paper.tex",
+                displayName: "Bad Link",
+                token: nil
+            )
+        }
+    }
+
+    @Test @MainActor func gitHubMultiProjectEndToEndWorkflowWithOfflineBareRepo() async throws {
+        guard let gitBin = GitRepositoryService.locateGitBinary() else {
+            Issue.record("git binary not found on macOS runner")
+            return
+        }
+
+        func runRawGit(_ args: [String], in dir: URL) throws {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: gitBin)
+            p.currentDirectoryURL = dir
+            p.arguments = args
+            var env = ProcessInfo.processInfo.environment
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GIT_AUTHOR_NAME"] = "Test Collaborator"
+            env["GIT_AUTHOR_EMAIL"] = "collab@example.com"
+            env["GIT_COMMITTER_NAME"] = "Test Collaborator"
+            env["GIT_COMMITTER_EMAIL"] = "collab@example.com"
+            p.environment = env
+            let errPipe = Pipe()
+            p.standardOutput = Pipe()
+            p.standardError = errPipe
+            try p.run()
+            p.waitUntilExit()
+            if p.terminationStatus != 0 {
+                let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                throw GitStorageError.commandFailed("git \(args.joined(separator: " ")) failed: \(err)")
+            }
+        }
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPGitE2E-\(UUID().uuidString)", isDirectory: true)
+        let bareRepoURL = tempRoot.appendingPathComponent("academic-remote.git", isDirectory: true)
+        let seedCloneURL = tempRoot.appendingPathComponent("seed-clone", isDirectory: true)
+        let collabCloneURL = tempRoot.appendingPathComponent("collab-clone", isDirectory: true)
+        let appReposRoot = tempRoot.appendingPathComponent("AppRepositories", isDirectory: true)
+        let fontsDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+        let tempFigs = tempRoot.appendingPathComponent("TempFigs", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let suiteName = "LaTeXaPGitE2E.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        // Seed bare remote with an initial commit & loose legacy .tex file on `main`
+        try runRawGit(["init", "--bare", "-b", "main", bareRepoURL.path], in: tempRoot)
+        try runRawGit(["clone", bareRepoURL.path, seedCloneURL.path], in: tempRoot)
+        try runRawGit(["checkout", "-B", "main"], in: seedCloneURL)
+        try "# Academic Repo\n".write(to: seedCloneURL.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        try "\\documentclass{article}\n\\begin{document}\nLegacy existing paper.\n\\end{document}\n"
+            .write(to: seedCloneURL.appendingPathComponent("legacy-notes.tex"), atomically: true, encoding: .utf8)
+        try runRawGit(["add", "README.md", "legacy-notes.tex"], in: seedCloneURL)
+        try runRawGit(["commit", "-m", "Initial remote setup"], in: seedCloneURL)
+        try runRawGit(["push", "-u", "origin", "main"], in: seedCloneURL)
+
+        let gitService = GitRepositoryService(
+            repositoriesRootDirectory: appReposRoot,
+            credentialStore: InMemoryGitCredentialStore(),
+            allowLocalTestBareRemotes: true
+        )
+        let vm = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: FontLibraryService(storageDirectory: fontsDir),
+            userDefaults: defaults,
+            tempFiguresDirectory: tempFigs,
+            compileOnInit: false,
+            gitRepositoryService: gitService,
+            gitCredentialStore: InMemoryGitCredentialStore()
+        )
+        vm.autoCompileEnabled = false
+
+        // 1. Connect bare remote repository & verify loose .tex discovery
+        await vm.connectGitHubRepository(
+            remoteURL: bareRepoURL.path,
+            branch: "main",
+            authMethod: .sshKey,
+            autoPushOnSave: true,
+            includePDFsInCommits: false
+        )
+        #expect(vm.activeRepo != nil)
+        #expect(vm.looseRepoTeXFiles == ["legacy-notes.tex"])
+        if let activeRepo = vm.activeRepo {
+            let localRepoURL = try await gitService.localRepositoryURL(for: activeRepo)
+            #expect(FileManager.default.fileExists(atPath: localRepoURL.appendingPathComponent(".gitignore").path))
+            #expect(FileManager.default.fileExists(atPath: localRepoURL.appendingPathComponent(".latexap-workspace.json").path))
+        }
+
+        // 2. Import loose .tex file into structured multi-project layout
+        await vm.importExistingTeXFileAsProject(relativeTeXPath: "legacy-notes.tex", displayName: "Legacy Notes")
+        #expect(vm.repoProjects.contains(where: { $0.slug == "legacy-notes" }))
+        #expect(vm.sourceText.contains("Legacy existing paper."))
+
+        // 3. Create two distinct academic projects inside the single repository
+        await vm.createProjectInActiveRepo(displayName: "CS229 Final Paper")
+        let projectA = vm.activeProject
+        #expect(projectA?.slug == "cs229-final-paper")
+
+        await vm.createProjectInActiveRepo(displayName: "Phys 101 Lab")
+        let projectB = vm.activeProject
+        #expect(projectB?.slug == "phys-101-lab")
+        #expect(vm.repoProjects.count == 3)
+
+        // 4. Switch back to Project A, edit TeX + BibTeX, verify dirty flag & default commit message
+        await vm.openProjectFromActiveRepo(projectA!)
+        #expect(!vm.hasUnsavedBufferEdits)
+        vm.sourceText = "\\documentclass{article}\n\\begin{document}\nTheorem 1 initial draft.\n\\end{document}\n"
+        vm.managedBibContent = "@article{lecun2015, author={LeCun, Y.}, title={Deep Learning}, year={2015}}"
+        #expect(vm.hasUnsavedBufferEdits)
+
+        await vm.saveAndCommitCurrentProject()
+        #expect(!vm.hasUnsavedBufferEdits)
+        #expect(vm.lastCommitSummary?.hasPrefix("Update CS229 Final Paper — ") == true)
+        #expect(!vm.isInGitConflictState)
+
+        // Repeated save with no edits must NOT create spurious metadata-only commits (#69 Item 1)
+        let countAfterFirstSave = vm.projectCommitHistory.count
+        await vm.saveAndCommitCurrentProject()
+        #expect(vm.projectCommitHistory.count == countAfterFirstSave)
+        #expect(vm.repoStatusMessage == "No changes to commit in CS229 Final Paper.")
+
+        // Project B history must remain isolated from Project A's update commit
+        if let projB = projectB, let repo = vm.activeRepo {
+            let repoURL = try await gitService.localRepositoryURL(for: repo)
+            let bHistory = try await gitService.projectHistory(in: repoURL, projectRelativePath: projB.relativePath)
+            #expect(bHistory.count == 1)
+            #expect(bHistory.first?.message == "Initialize Phys 101 Lab")
+        }
+
+        // 5. Save with custom commit message, inspect history/diff, and non-destructively restore
+        vm.sourceText = "\\documentclass{article}\n\\begin{document}\nTheorem 2 revised proof.\n\\end{document}\n"
+        await vm.saveAndCommitCurrentProject(customMessage: "Draft: Added Theorem 2 proof", pushImmediately: true)
+        #expect(vm.projectCommitHistory.first?.message == "Draft: Added Theorem 2 proof")
+        #expect(vm.projectCommitHistory.first?.isPushed == true)
+
+        if let latest = vm.projectCommitHistory.first,
+           vm.projectCommitHistory.count >= 2 {
+            let previous = vm.projectCommitHistory[1]
+            let diff = await vm.previewDiffAtCommit(latest)
+            #expect(diff.contains("Theorem 2 revised proof."))
+            let oldText = await vm.previewFileAtCommit(previous, relativeFilePath: "\(projectA!.relativePath)/main.tex")
+            #expect(oldText?.contains("Theorem 1 initial draft.") == true)
+
+            // Non-destructive restore creates a forward commit restoring Theorem 1
+            await vm.restoreProjectToCommit(previous)
+            #expect(vm.sourceText.contains("Theorem 1 initial draft."))
+            #expect(vm.projectCommitHistory.first?.message.hasPrefix("Restore CS229 Final Paper") == true)
+        }
+
+        // 6. Simulate real remote conflict from collaborator clone & resolve cleanly keeping both versions
+        try runRawGit(["clone", bareRepoURL.path, collabCloneURL.path], in: tempRoot)
+        try runRawGit(["checkout", "main"], in: collabCloneURL)
+        let collabMainTeX = collabCloneURL.appendingPathComponent("projects/cs229-final-paper/main.tex")
+        try "\\documentclass{article}\n\\begin{document}\nRemote collaborator proof version.\n\\end{document}\n"
+            .write(to: collabMainTeX, atomically: true, encoding: .utf8)
+        try runRawGit(["add", "projects/cs229-final-paper/main.tex"], in: collabCloneURL)
+        try runRawGit(["commit", "-m", "Collaborator edit on CS229"], in: collabCloneURL)
+        try runRawGit(["push", "origin", "main"], in: collabCloneURL)
+
+        vm.sourceText = "\\documentclass{article}\n\\begin{document}\nLocal unpushed proof version.\n\\end{document}\n"
+        await vm.saveAndCommitCurrentProject(customMessage: "Local conflicting draft", pushImmediately: true)
+        #expect(vm.isInGitConflictState)
+        if case .conflict(let files, _) = vm.gitSyncState {
+            #expect(files.contains("projects/cs229-final-paper/main.tex"))
+        } else {
+            Issue.record("Expected conflict state after divergent collaborator push")
+        }
+        // Working copy stays free of conflict markers while conflict banner awaits user choice
+        #expect(!vm.sourceText.contains("<<<<<<<"))
+
+        await vm.resolveConflictKeepBoth()
+        #expect(!vm.isInGitConflictState)
+        #expect(vm.sourceText.contains("Local unpushed proof version."))
+        if let activeRepo = vm.activeRepo {
+            let localRepoURL = try await gitService.localRepositoryURL(for: activeRepo)
+            let remoteBackupURL = localRepoURL.appendingPathComponent("projects/cs229-final-paper/main-remote.tex")
+            #expect(FileManager.default.fileExists(atPath: remoteBackupURL.path))
+            let backupText = try String(contentsOf: remoteBackupURL, encoding: .utf8)
+            #expect(backupText.contains("Remote collaborator proof version."))
+        }
+
+        // 7. Update repo settings & delete one project cleanly
+        await vm.updateActiveRepoSettings(autoPushOnSave: false, includePDFsInCommits: true)
+        #expect(vm.activeRepo?.autoPushOnSave == false)
+        #expect(vm.commitPushImmediately == false)
+
+        if let physLab = projectB {
+            await vm.deleteProjectFromActiveRepo(physLab)
+            #expect(!vm.repoProjects.contains(where: { $0.slug == "phys-101-lab" }))
+        }
+
+        // 8. Large (>64 KB) commit diff does not deadlock pipe reader (#68 Item 2)
+        let bigLine = String(repeating: "A", count: 85_000)
+        vm.sourceText = "\\documentclass{article}\n\\begin{document}\n%\(bigLine)\n\\end{document}\n"
+        await vm.saveAndCommitCurrentProject(customMessage: "Large diff pipe test", pushImmediately: true)
+        if let bigCommit = vm.projectCommitHistory.first {
+            let bigDiff = await vm.previewDiffAtCommit(bigCommit)
+            #expect(bigDiff.count > 70_000)
+        }
+
+        // 9. Paper Setup Wizard & disconnectRepo clear activeProject and currentFileURL (#69 Item 2)
+        vm.applyPaperSetupWizard(PaperSetupConfig(templateId: "apa7-student", title: "Fresh Wizard Paper"))
+        #expect(vm.activeProject == nil)
+        #expect(vm.currentFileURL == nil)
+        #expect(!vm.hasUnsavedBufferEdits)
+
+        if let repo = vm.activeRepo {
+            vm.disconnectRepo(repo, deleteLocalClone: false)
+            #expect(vm.activeRepo == nil)
+            #expect(vm.activeProject == nil)
+            #expect(vm.currentFileURL == nil)
+        }
+    }
+
+    @Test @MainActor func gitHubPhase3SecurityAndCodeReviewRegressions() async throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LaTeXaPGitP3Sec-\(UUID().uuidString)", isDirectory: true)
+        let reposRoot = tempRoot.appendingPathComponent("Repos", isDirectory: true)
+        let repoDir = reposRoot.appendingPathComponent("attacker-malicious", isDirectory: true)
+        let projectsDir = repoDir.appendingPathComponent("projects", isDirectory: true)
+        let projDir = projectsDir.appendingPathComponent("evil-paper", isDirectory: true)
+        let outsideDir = tempRoot.appendingPathComponent("Outside", isDirectory: true)
+        let tempFigs = tempRoot.appendingPathComponent("TempFigs", isDirectory: true)
+        let tempFigsSubdir = tempFigs.appendingPathComponent("nested", isDirectory: true)
+        let fontsDir = tempRoot.appendingPathComponent("Fonts", isDirectory: true)
+
+        try FileManager.default.createDirectory(at: projDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: tempFigs, withIntermediateDirectories: true)
+        let suiteName = "LaTeXaPGitP3Sec.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+
+        // 1. Port guard rejects non-443 ports on HTTPS GitHub URLs
+        #expect(GitHubWorkspaceValidator.parseAndValidateRemoteURL("https://github.com:8443/octocat/repo.git") == nil)
+        #expect(GitHubWorkspaceValidator.parseAndValidateRemoteURL("https://github.com:443/octocat/repo.git") != nil)
+        #expect(GitHubWorkspaceValidator.validatedProjectRelativeFile("../../.ssh/authorized_keys", allowedExtensions: ["tex"]) == nil)
+        #expect(GitHubWorkspaceValidator.validatedProjectRelativeFile(".git/config", allowedExtensions: nil) == nil)
+        #expect(GitHubWorkspaceValidator.validatedProjectRelativeFile("chapters/sec1.tex", allowedExtensions: ["tex"]) == "chapters/sec1.tex")
+
+        let outsideFile = outsideDir.appendingPathComponent("secret.tex")
+        try "TOP_SECRET_DATA".write(to: outsideFile, atomically: true, encoding: .utf8)
+
+        let service = GitRepositoryService(
+            repositoriesRootDirectory: reposRoot,
+            credentialStore: InMemoryGitCredentialStore(),
+            allowLocalTestBareRemotes: true
+        )
+
+        // 2. Crafted .latexap-workspace.json with mainTexFile/bibFile traversal is filtered out by discoverProjects
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let craftedProj = AcademicProjectDescriptor(
+            slug: "evil-paper",
+            displayName: "Evil Paper",
+            relativePath: "projects/evil-paper",
+            mainTexFile: "../../../Outside/secret.tex",
+            bibFile: "../../.git/hooks/post-checkout"
+        )
+        let craftedManifest = GitHubWorkspaceManifest(
+            schemaVersion: 1,
+            repoFullName: "attacker/malicious",
+            defaultBranch: "main",
+            projects: [craftedProj]
+        )
+        try encoder.encode(craftedManifest).write(to: repoDir.appendingPathComponent(".latexap-workspace.json"))
+        try encoder.encode(craftedProj).write(to: projDir.appendingPathComponent("project.json"))
+
+        let discovery = try await service.discoverProjects(in: repoDir, defaultBranch: "main", repoFullName: "attacker/malicious")
+        #expect(discovery.manifest.projects.isEmpty)
+
+        // 3. ViewModel refuses to open OR overwrite via crafted AcademicProjectDescriptor
+        let conn = GitHubRepoConnection(
+            owner: "attacker",
+            repoName: "malicious",
+            remoteURLString: tempRoot.appendingPathComponent("bare.git").path,
+            branch: "main",
+            authMethod: .sshKey,
+            localFolderName: "attacker-malicious"
+        )
+        let vm = DocumentViewModel(
+            initialTemplate: LaTeXCatalog.defaultTemplate,
+            fontLibraryService: FontLibraryService(storageDirectory: fontsDir),
+            userDefaults: defaults,
+            tempFiguresDirectory: tempFigs,
+            compileOnInit: false,
+            gitRepositoryService: service,
+            gitCredentialStore: InMemoryGitCredentialStore()
+        )
+        vm.autoCompileEnabled = false
+        vm.activeRepo = conn
+
+        await vm.openProjectFromActiveRepo(craftedProj)
+        #expect(vm.activeProject == nil)
+        #expect(!vm.sourceText.contains("TOP_SECRET_DATA"))
+
+        vm.activeProject = craftedProj
+        vm.sourceText = "OVERWRITTEN"
+        await vm.saveAndCommitCurrentProject()
+        #expect(try String(contentsOf: outsideFile, encoding: .utf8) == "TOP_SECRET_DATA")
+
+        // 4. Symlinked figures/nested directory inside tempFiguresDir is blocked during createProject(copyFiguresFrom:)
+        try FileManager.default.createSymbolicLink(at: tempFigsSubdir, withDestinationURL: outsideDir)
+        let outsideImg = outsideDir.appendingPathComponent("secret.png")
+        try Data([0x89, 0x50, 0x4E, 0x47]).write(to: outsideImg)
+
+        let cleanRepoDir = reposRoot.appendingPathComponent("clean-repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: cleanRepoDir, withIntermediateDirectories: true)
+        let initGit = { (args: [String]) in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: GitRepositoryService.locateGitBinary()!)
+            p.currentDirectoryURL = cleanRepoDir
+            p.arguments = args
+            try p.run()
+            p.waitUntilExit()
+        }
+        try initGit(["init", "-b", "main"])
+
+        let cleanConn = GitHubRepoConnection(
+            owner: "local",
+            repoName: "clean",
+            remoteURLString: tempRoot.appendingPathComponent("clean-bare.git").path,
+            branch: "main",
+            authMethod: .sshKey,
+            localFolderName: "clean-repo",
+            autoPushOnSave: false
+        )
+        let created = try await service.createProject(
+            in: cleanRepoDir,
+            connection: cleanConn,
+            displayName: "Safe Paper",
+            mainContent: "\\documentclass{article}\n\\begin{document}\n\\includegraphics{figures/nested/secret.png}\n\\end{document}\n",
+            copyFiguresFrom: tempFigs,
+            token: nil
+        )
+        let copiedPath = cleanRepoDir.appendingPathComponent("\(created.project.relativePath)/figures/nested/secret.png")
+        #expect(!FileManager.default.fileExists(atPath: copiedPath.path))
+
+        // 5. Symlinked projects/ directory throws securityViolation on discoverProjects
+        let symRepoDir = reposRoot.appendingPathComponent("sym-projects-repo", isDirectory: true)
+        try FileManager.default.createDirectory(at: symRepoDir, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: symRepoDir.appendingPathComponent("projects"), withDestinationURL: outsideDir)
+        await #expect(throws: GitStorageError.self) {
+            _ = try await service.discoverProjects(in: symRepoDir)
+        }
+    }
 }

@@ -49,15 +49,22 @@
    - **Visual Spreadsheet Table, `pgfplots` Chart & Relative Figure Assistant**: Build `booktabs` tables in a 2D editable grid or CSV mode, generate `pgfplots` line/bar/scatter charts from CSV data, and import/drop images into relative `figures/` folders with single or side-by-side (`subcaption`) layouts.
    - **Rubric Word/Page Budgets, Prose Spellcheck (`⌥⌘;`) & Submission `.zip` Export (`⌥⇧⌘E`)**: Track prose-only, abstract, and page budgets from the status bar (with optional **Student Mode**), toggle LaTeX-aware prose spellcheck, and bundle `.tex`, `.bib`, `figures/`, and fonts into a clean `.zip` archive.
 
-5. **Custom Fonts & Editor Typography (`v0.1.2`)**
+5. **GitHub Repository Multi-Project Storage (`v0.3.0`)**
+   - **Connect & Manage GitHub Repositories (`⇧⌘G`)**: Connect an existing GitHub repository or create a new one directly in LaTeXaP using **GitHub CLI (`gh`)**, a **Personal Access Token** stored securely in **macOS Keychain**, or **SSH (`~/.ssh`)**.
+   - **Multi-Project Layout (`projects/<slug>/`)**: Organize multiple independent papers, lab reports, and theses inside one repository—each isolated in `projects/<slug>/` with its own `main.tex`, `references.bib`, `figures/`, and `project.json`, coordinated by `.latexap-workspace.json` and a LaTeX `.gitignore` (and auto-discovery/import of existing `.tex` files).
+   - **Quick Save & Commit (`⌘S`) & Custom Commit Popover (`⌥⌘S`)**: `⌘S` saves your project files and creates a scoped Git commit using the automatic timestamped message `Update <Project Name> — YYYY-MM-DD HH:mm` (auto-pushing in the background when enabled, or queuing cleanly offline). Press **`⌥⌘S`** (**Save & Commit with Message...**) to inspect changed files, customize the commit message with quick prefixes, and choose whether to push immediately.
+   - **Per-Project Commit History & Version Restore (`⌥⌘H`)**: Browse commits scoped to the active project, preview historical file snapshots or diffs, and restore any prior version via a safe forward commit that keeps full history intact.
+   - **Automatic Rebase Sync & Guided Conflict Recovery**: Background sync handles upstream updates, pauses compilation on conflicts, and lets you resolve per-file or keep both versions (`Keep Both Copies`, `Keep My Local Version`, or `Use GitHub Version`).
+
+6. **Custom Fonts & Editor Typography (`v0.1.2`)**
    - **Font Manager (`⇧⌘F`) & Fonts Sidebar Tab**: Import local `.ttf`, `.otf`, and `.ttc` font files (via **View → Add Custom Font...**, **Add Font...**, or drag-and-drop), preview live customizable specimens (`10–36 pt`, Light/Dark surface), rename, and safely remove managed fonts with reference-aware confirmation.
    - **XeTeX (`fontspec`) & CTAN Font Presets**: Apply custom fonts or macOS system fonts directly to your document's **Main** (`\setmainfont`), **Sans** (`\setsansfont`), **Mono** (`\setmonofont`), or named **`\newfontfamily`** preamble roles, or insert one-click CTAN font packages (`libertinus`, `ebgaramond`, `fira`, `plex`, `lmodern`, `tgpagella`). Managed fonts are stored non-invasively in `~/Library/Application Support/LaTeXaP/Fonts/` and automatically exposed to Tectonic.
    - **Code Editor Font Picker**: Choose System Monospaced, any macOS monospaced font, or an imported custom font (`10–24 pt`) from the editor header popover or Font Manager, persisted across launches.
 
-6. **PDF & Submission Export**
+7. **PDF & Submission Export**
    - Export compiled PDF documents (**Export PDF** / `⇧⌘E`) or self-contained submission packages (**Export Submission Bundle (.zip)** / `⌥⇧⌘E`).
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes, [docs/academic-suite-architecture.md](docs/academic-suite-architecture.md) / [docs/academic-suite-ux.md](docs/academic-suite-ux.md) for the v0.2.0 Academic Suite design, and [docs/custom-fonts-architecture.md](docs/custom-fonts-architecture.md) / [docs/custom-fonts-ux.md](docs/custom-fonts-ux.md) for custom font architecture.
+See [CHANGELOG.md](CHANGELOG.md) for release notes, [docs/github-repo-storage-architecture.md](docs/github-repo-storage-architecture.md) / [docs/github-repo-storage-ux.md](docs/github-repo-storage-ux.md) for v0.3.0 GitHub Multi-Project Storage, [docs/academic-suite-architecture.md](docs/academic-suite-architecture.md) / [docs/academic-suite-ux.md](docs/academic-suite-ux.md) for the v0.2.0 Academic Suite design, and [docs/custom-fonts-architecture.md](docs/custom-fonts-architecture.md) / [docs/custom-fonts-ux.md](docs/custom-fonts-ux.md) for custom font architecture.
 
 ---
 

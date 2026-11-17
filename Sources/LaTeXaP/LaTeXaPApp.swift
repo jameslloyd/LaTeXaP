@@ -6,8 +6,8 @@ extension Notification.Name {
 }
 
 enum AppMetadata {
-    static let version = "0.2.0"
-    static let build = "4"
+    static let version = "0.3.0"
+    static let build = "5"
     static let repoURLString = "https://github.com/jameslloyd/LaTeXaP"
     static let repoGitURLString = "https://github.com/jameslloyd/LaTeXaP.git"
     static let repoURL = URL(string: "https://github.com/jameslloyd/LaTeXaP")!
@@ -132,9 +132,15 @@ struct LaTeXaPApp: App {
                 Divider()
 
                 Button("Save") {
-                    viewModel.saveTexFile(saveAs: false)
+                    viewModel.saveDocument()
                 }
                 .keyboardShortcut("s", modifiers: [.command])
+
+                Button("Save & Commit with Message...") {
+                    Task { await viewModel.prepareCustomCommitPopover() }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(viewModel.activeRepo == nil || viewModel.activeProject == nil)
 
                 Button("Save As...") {
                     viewModel.saveTexFile(saveAs: true)
@@ -234,6 +240,31 @@ struct LaTeXaPApp: App {
                     viewModel.editorFontSize = max(10, viewModel.editorFontSize - 1)
                 }
                 .keyboardShortcut("-", modifiers: [.command])
+            }
+
+            CommandMenu("GitHub") {
+                Button("Connect GitHub Repository...") {
+                    viewModel.showRepoSetupSheet = true
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+
+                Button("New Project in Repository...") {
+                    viewModel.showNewRepoProjectSheet = true
+                }
+                .disabled(viewModel.activeRepo == nil)
+
+                Divider()
+
+                Button("Sync with GitHub") {
+                    Task { await viewModel.syncActiveRepository() }
+                }
+                .disabled(viewModel.activeRepo == nil || viewModel.gitSyncState.isBusy)
+
+                Button("Project Commit History...") {
+                    viewModel.showProjectHistorySheet = true
+                }
+                .keyboardShortcut("h", modifiers: [.command, .option])
+                .disabled(viewModel.activeProject == nil)
             }
         }
     }

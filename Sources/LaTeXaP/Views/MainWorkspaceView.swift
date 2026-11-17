@@ -33,6 +33,10 @@ private final class MainWorkspaceUIState: ObservableObject {
     @Published var bibPageLocator: String = ""
     @Published var isBibDropTargeted: Bool = false
     @Published var expandedRawDiagnosticIDs: Set<String> = []
+    @Published var pendingProjectToSwitch: AcademicProjectDescriptor? = nil
+    @Published var showDirtySwitchAlert: Bool = false
+    @Published var projectPendingDeletion: AcademicProjectDescriptor? = nil
+    @Published var showDeleteProjectConfirm: Bool = false
 }
 
 public struct MainWorkspaceView: View {
@@ -45,6 +49,9 @@ public struct MainWorkspaceView: View {
     @FocusState private var isBudgetPillFocused: Bool
     @FocusState private var isWizardButtonFocused: Bool
     @FocusState private var isBibLookupFieldFocused: Bool
+    @FocusState private var isCommitToolbarFocused: Bool
+    @FocusState private var isRepoSidebarFocused: Bool
+    @FocusState private var isHistoryTriggerFocused: Bool
 
     public init(viewModel: DocumentViewModel) {
         self.viewModel = viewModel
@@ -61,6 +68,11 @@ public struct MainWorkspaceView: View {
                 .navigationSplitViewColumnWidth(min: 230, ideal: 265, max: 340)
         } detail: {
             VStack(spacing: 0) {
+                if viewModel.isInGitConflictState {
+                    gitConflictBanner
+                    Divider()
+                }
+
                 if let exportMessage = viewModel.submissionExportMessage {
                     submissionExportBanner(message: exportMessage)
                     Divider()
@@ -95,11 +107,46 @@ public struct MainWorkspaceView: View {
                 .help("Open an existing LaTeX document (⌘O)")
 
                 Button {
-                    viewModel.saveTexFile()
+                    viewModel.saveDocument()
                 } label: {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
-                .help("Save current .tex source file (⌘S)")
+                .help(
+                    viewModel.activeRepo != nil && viewModel.activeProject != nil
+                        ? "Save & Commit current project to GitHub (⌘S)"
+                        : "Save current .tex source file (⌘S)"
+                )
+
+                if viewModel.activeRepo != nil, viewModel.activeProject != nil {
+                    Button {
+                        Task { await viewModel.prepareCustomCommitPopover() }
+                    } label: {
+                        Label("Commit...", systemImage: "arrow.triangle.branch")
+                    }
+                    .focused($isCommitToolbarFocused)
+                    .popover(isPresented: $viewModel.showCommitMessagePopover, arrowEdge: .bottom) {
+                        CommitSavePopoverView(viewModel: viewModel)
+                    }
+                    .help("Save & Commit with a custom commit message (⌥⌘S)")
+                    .accessibilityLabel("Commit with message")
+                    .accessibilityHint("Opens popover to enter a commit message and choose whether to push to GitHub")
+
+                    Button {
+                        Task { await viewModel.syncActiveRepository() }
+                    } label: {
+                        if viewModel.gitSyncState.isBusy {
+                            HStack(spacing: 4) {
+                                ProgressView().controlSize(.small)
+                                Text("Syncing")
+                            }
+                        } else {
+                            Label("Sync", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                    }
+                    .disabled(viewModel.gitSyncState.isBusy)
+                    .help("Pull remote updates and push local commits to GitHub")
+                    .accessibilityLabel("Sync with GitHub")
+                }
             }
 
             ToolbarItemGroup(placement: .principal) {
@@ -252,6 +299,54 @@ public struct MainWorkspaceView: View {
         }) {
             FigureAssistantSheetView(viewModel: viewModel)
         }
+        .sheet(isPresented: $viewModel.showRepoSetupSheet, onDismiss: {
+            isRepoSidebarFocused = true
+        }) {
+            GitHubWorkspaceSetupSheetView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showNewRepoProjectSheet, onDismiss: {
+            isRepoSidebarFocused = true
+        }) {
+            NewRepoProjectSheetView(viewModel: viewModel)
+        }
+        .sheet(isPresented: $viewModel.showProjectHistorySheet, onDismiss: {
+            isHistoryTriggerFocused = true
+        }) {
+            ProjectHistorySheetView(viewModel: viewModel)
+        }
+        .alert("Unsaved Changes in Current Project", isPresented: $uiState.showDirtySwitchAlert, presenting: uiState.pendingProjectToSwitch) { nextProject in
+            Button("Save & Commit, Then Switch") {
+                uiState.pendingProjectToSwitch = nil
+                Task {
+                    await viewModel.saveAndCommitCurrentProject()
+                    await viewModel.openProjectFromActiveRepo(nextProject)
+                }
+            }
+            Button("Discard Edits & Switch", role: .destructive) {
+                uiState.pendingProjectToSwitch = nil
+                Task {
+                    await viewModel.discardUnsavedProjectEdits()
+                    await viewModel.openProjectFromActiveRepo(nextProject)
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                uiState.pendingProjectToSwitch = nil
+            }
+        } message: { nextProject in
+            let currentName = viewModel.activeProject?.displayName ?? "current project"
+            Text("'\(currentName)' has uncommitted edits. Save & commit before opening '\(nextProject.displayName)'?")
+        }
+        .alert("Delete Project from Repository?", isPresented: $uiState.showDeleteProjectConfirm, presenting: uiState.projectPendingDeletion) { project in
+            Button("Delete '\(project.displayName)'", role: .destructive) {
+                uiState.projectPendingDeletion = nil
+                Task { await viewModel.deleteProjectFromActiveRepo(project) }
+            }
+            Button("Cancel", role: .cancel) {
+                uiState.projectPendingDeletion = nil
+            }
+        } message: { project in
+            Text("This removes '\(project.relativePath)' from the repository and commits the deletion (earlier commits remain recoverable in Git history).")
+        }
         .alert("Pre-Flight Checks Found Issues", isPresented: $uiState.showSubmissionPreExportAlert) {
             Button("Review Pre-Flight") {
                 viewModel.selectedDiagnosticTab = 1
@@ -269,6 +364,20 @@ public struct MainWorkspaceView: View {
         .onChange(of: viewModel.showCitationPickerPopover) { _, isShown in
             if !isShown {
                 isCiteToolbarFocused = true
+            }
+        }
+        .onChange(of: viewModel.showCommitMessagePopover) { _, isShown in
+            if !isShown {
+                isCommitToolbarFocused = true
+            }
+        }
+        .onChange(of: viewModel.repoStatusMessage) { _, message in
+            if let message, !message.isEmpty {
+                NSAccessibility.post(
+                    element: NSApp as Any,
+                    notification: .announcementRequested,
+                    userInfo: [.announcement: message]
+                )
             }
         }
         .onChange(of: uiState.showPaperBudgetPopover) { _, isShown in
@@ -337,10 +446,35 @@ public struct MainWorkspaceView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var gitConflictBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("Merge conflict detected in \(viewModel.activeProject?.displayName ?? "active project"). Compilation is paused until conflicts are resolved.")
+                .font(.caption.weight(.medium))
+                .lineLimit(2)
+            Spacer()
+            Button("Resolve Conflicts...") {
+                viewModel.showProjectHistorySheet = true
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Resolve merge conflicts")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.orange.opacity(0.14))
+        .accessibilityElement(children: .contain)
+    }
+
     // MARK: - Sidebar
 
     private var sidebarContent: some View {
         VStack(spacing: 0) {
+            githubWorkspaceHeaderStrip
+
+            Divider()
+
             Picker("", selection: $viewModel.selectedSidebarTab) {
                 ForEach(SidebarTab.allCases) { tab in
                     Image(systemName: tab.icon)
@@ -1464,9 +1598,37 @@ public struct MainWorkspaceView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(.red)
                     .lineLimit(1)
+            } else if let repoMsg = viewModel.repoStatusMessage, !repoMsg.isEmpty {
+                Text(repoMsg)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
 
             Spacer()
+
+            if viewModel.activeRepo != nil, viewModel.activeProject != nil {
+                let syncMeta = syncStatusVisual(for: viewModel.gitSyncState)
+                Button {
+                    viewModel.showProjectHistorySheet = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: syncMeta.icon)
+                            .foregroundStyle(syncMeta.color)
+                        Text(viewModel.lastCommitSummary ?? syncMeta.title)
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(syncMeta.color.opacity(0.10))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Open Project Commit History & Version Restore (⌥⌘H)")
+                .accessibilityLabel("GitHub sync status: \(syncMeta.title)")
+                .accessibilityHint("Opens Project Commit History")
+            }
 
             HStack(spacing: 10) {
                 Button {
@@ -1589,6 +1751,245 @@ public struct MainWorkspaceView: View {
         case "xparse": return .indigo
         case "env": return .teal
         default: return .blue
+        }
+    }
+
+    // MARK: - GitHub Multi-Project Sidebar Strip
+
+    @ViewBuilder
+    private var githubWorkspaceHeaderStrip: some View {
+        if let repo = viewModel.activeRepo {
+            let syncVisual = syncStatusVisual(for: viewModel.gitSyncState)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "externaldrive.badge.icloud")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.blue)
+                        .accessibilityHidden(true)
+
+                    Text(repo.fullName)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .lineLimit(1)
+
+                    Text(repo.branch)
+                        .font(.system(size: 10, design: .monospaced))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.14))
+                        .clipShape(Capsule())
+
+                    Spacer()
+
+                    Button {
+                        viewModel.showRepoSetupSheet = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .focused($isRepoSidebarFocused)
+                    .help("Repository Settings, Switch Repo, or Disconnect (⇧⌘G)")
+                    .accessibilityLabel("GitHub repository settings")
+                }
+
+                HStack(spacing: 6) {
+                    Menu {
+                        if viewModel.repoProjects.isEmpty {
+                            Text("No projects yet")
+                        } else {
+                            ForEach(viewModel.repoProjects) { project in
+                                Button {
+                                    requestSwitchProject(project)
+                                } label: {
+                                    HStack {
+                                        Text(project.displayName)
+                                        if viewModel.activeProject?.id == project.id {
+                                            Image(systemName: "checkmark")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Button {
+                            viewModel.showNewRepoProjectSheet = true
+                        } label: {
+                            Label("New Project in Repo...", systemImage: "folder.badge.plus")
+                        }
+
+                        if let active = viewModel.activeProject {
+                            Button {
+                                viewModel.showProjectHistorySheet = true
+                            } label: {
+                                Label("Project Commit History...", systemImage: "clock.arrow.circlepath")
+                            }
+
+                            Button(role: .destructive) {
+                                uiState.projectPendingDeletion = active
+                                uiState.showDeleteProjectConfirm = true
+                            } label: {
+                                Label("Delete '\(active.displayName)'...", systemImage: "trash")
+                            }
+                        }
+
+                        Divider()
+
+                        Button {
+                            viewModel.showRepoSetupSheet = true
+                        } label: {
+                            Label("Repository Settings & Switch Repo...", systemImage: "gearshape")
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "folder.fill")
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                            Text(viewModel.activeProject?.displayName ?? "Select or Create Project...")
+                                .font(.system(size: 12, weight: .semibold))
+                                .lineLimit(1)
+                            if viewModel.hasUnsavedBufferEdits {
+                                Circle()
+                                    .fill(Color.orange)
+                                    .frame(width: 6, height: 6)
+                                    .help("Uncommitted edits")
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(NSColor.textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .accessibilityLabel("Active repository project")
+                    .accessibilityValue(viewModel.activeProject?.displayName ?? "None selected")
+                }
+
+                HStack(spacing: 6) {
+                    Button {
+                        if viewModel.isInGitConflictState {
+                            viewModel.showProjectHistorySheet = true
+                        } else {
+                            Task { await viewModel.syncActiveRepository() }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if viewModel.gitSyncState.isBusy {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: syncVisual.icon)
+                                    .foregroundStyle(syncVisual.color)
+                            }
+                            Text(syncVisual.title)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundStyle(syncVisual.isWarning ? syncVisual.color : .secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(syncVisual.color.opacity(0.10))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(viewModel.gitSyncState.isBusy)
+                    .help(viewModel.isInGitConflictState ? "Resolve merge conflict" : "Sync active repository with GitHub")
+                    .accessibilityLabel("Git sync status: \(syncVisual.title)")
+
+                    Spacer()
+
+                    if viewModel.activeProject != nil {
+                        Button {
+                            viewModel.showProjectHistorySheet = true
+                        } label: {
+                            Label("History", systemImage: "clock.arrow.circlepath")
+                                .font(.system(size: 10.5, weight: .medium))
+                        }
+                        .buttonStyle(.borderless)
+                        .focused($isHistoryTriggerFocused)
+                        .help("Open Project Commit History (⌥⌘H)")
+                        .accessibilityLabel("Project commit history")
+                    }
+
+                    Button {
+                        viewModel.showNewRepoProjectSheet = true
+                    } label: {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("New Project in Repository")
+                    .accessibilityLabel("New project in repository")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color(NSColor.windowBackgroundColor).opacity(0.65))
+            .accessibilityElement(children: .contain)
+        } else {
+            HStack(spacing: 6) {
+                Button {
+                    viewModel.showRepoSetupSheet = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "link.badge.plus")
+                            .foregroundStyle(.blue)
+                        Text("Connect GitHub Repo...")
+                            .font(.system(size: 11.5, weight: .medium))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color(NSColor.textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                .buttonStyle(.plain)
+                .focused($isRepoSidebarFocused)
+                .help("Connect a GitHub repository to manage and version multiple LaTeX projects (⇧⌘G)")
+                .accessibilityLabel("Connect GitHub Repository")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func syncStatusVisual(for state: GitSyncState) -> (title: String, icon: String, color: Color, isWarning: Bool) {
+        switch state {
+        case .disconnected:
+            return ("Disconnected", "icloud.slash", .secondary, false)
+        case .idle(let ahead, let behind, _):
+            if ahead > 0 && behind > 0 {
+                return ("\(ahead)↑ \(behind)↓", "arrow.up.arrow.down.circle.fill", .orange, true)
+            } else if ahead > 0 {
+                return ("\(ahead) Ahead", "arrow.up.circle.fill", .blue, false)
+            } else if behind > 0 {
+                return ("\(behind) Behind", "arrow.down.circle.fill", .orange, true)
+            }
+            return ("Synced", "checkmark.icloud.fill", .green, false)
+        case .committing:
+            return ("Committing...", "arrow.triangle.branch", .blue, false)
+        case .syncing(let status):
+            return (status.isEmpty ? "Syncing..." : status, "arrow.triangle.2.circlepath", .blue, false)
+        case .offlinePendingPush(let ahead):
+            return ("\(max(1, ahead)) Local • Offline", "icloud.slash.fill", .orange, true)
+        case .conflict(let files, _):
+            return ("Conflict (\(max(1, files.count)))", "exclamationmark.triangle.fill", .red, true)
+        case .failed:
+            return ("Sync Error", "xmark.octagon.fill", .red, true)
+        }
+    }
+
+    private func requestSwitchProject(_ project: AcademicProjectDescriptor) {
+        guard project.id != viewModel.activeProject?.id else { return }
+        if viewModel.hasUnsavedBufferEdits {
+            uiState.pendingProjectToSwitch = project
+            uiState.showDirtySwitchAlert = true
+        } else {
+            Task { await viewModel.openProjectFromActiveRepo(project) }
         }
     }
 }

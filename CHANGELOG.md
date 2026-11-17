@@ -2,6 +2,37 @@
 
 All notable changes to **LaTeXaP** are documented in this file.
 
+## [0.3.0] — 2026-11-17
+
+### Added — GitHub Repository Multi-Project Storage
+- **GitHub Repository Connection & Onboarding (`⇧⌘G`)**:
+  - Added `GitHubWorkspaceSetupSheetView`, `GitHubAPIService`, and `GitKeychainService` (`GitCredentialStore`) supporting **GitHub CLI (`gh`)**, **Personal Access Tokens** stored in **macOS Keychain** (`com.latexap.studio.github`), and **SSH (`~/.ssh`)**.
+  - Added existing repository browsing, one-click new private/public repository creation on GitHub, repository switching, disconnect with optional local clone deletion, and discovery/import of loose `.tex` files in existing repositories.
+- **Multi-Project Repository Layout (`projects/<slug>/`)**:
+  - Added `GitHubWorkspaceModels` (`GitHubRepoConnection`, `GitHubWorkspaceManifest`, `AcademicProjectDescriptor`, `GitSyncState`, `GitHubWorkspaceValidator`) and the `GitRepositoryService` actor managing local clones in `~/Library/Application Support/LaTeXaP/Repositories/`.
+  - Isolated each project under `projects/<slug>/` with `project.json`, `main.tex`, `references.bib`, and `figures/`, coordinated by `.latexap-workspace.json` and an automatic LaTeX `.gitignore` (excluding build intermediates and, by default, `*.pdf`, toggleable via `includePDFsInCommits`).
+  - Added `NewRepoProjectSheetView` and a sidebar repository/project header strip (`MainWorkspaceView`) + `GitHub` menu (`LaTeXaPApp`) for creating, switching (with dirty-state save/discard prompt), and deleting projects.
+- **Quick Save & Commit (`⌘S`) and Custom Commit Popover (`⌥⌘S`)**:
+  - Updated `⌘S` (`DocumentViewModel.saveDocument`) when inside a repository project to save `main.tex`, `references.bib`, and `figures/` and create a scoped Git commit with default message `Update <Project Name> — YYYY-MM-DD HH:mm`, pushing asynchronously when `autoPushOnSave` is enabled or queuing locally as `.offlinePendingPush` when offline.
+  - Added **Save & Commit with Message... (`⌥⌘S`)** (`CommitSavePopoverView`) showing scoped changed files (`git status --porcelain=v1 -uall`), quick commit prefixes (`Draft:`, `Revisions:`, `Citations:`, `Figures:`, `Final:`), editable commit message with default timestamped fallback, and an immediate push toggle.
+- **Per-Project Commit History & Version Restore (`⌥⌘H`)**:
+  - Added `ProjectHistorySheetView` displaying commits filtered to `projects/<slug>/` (`Pushed` / `Local` status), file snapshot and commit diff previews (`fileContentAtCommit`, `commitDiff`), and non-destructive version restore (`restoreProjectToCommit`) creating a new forward commit.
+- **Conflict Recovery & Sync**:
+  - Added automatic `fetch` + `pull --rebase --autostash` recovery on non-fast-forward pushes, paused Tectonic auto-compilation during unresolved conflicts, and guided conflict resolution (`resolveConflict`) with **Keep Both Copies** (writing binary-safe `<stem>-remote.<ext>` backups), **Keep My Local Version**, or **Use GitHub Version**, plus automatic `.latexap-workspace.json` project-list merging.
+
+### Security & Hardening
+- Stored Personal Access Tokens exclusively in macOS Keychain (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`) and injected HTTPS credentials via ephemeral `0700` `GIT_ASKPASS` helper scripts (`GIT_TERMINAL_PROMPT=0`) removed in `defer`, with token redaction across `stderr`, `stdout`, and HTTP error messages (`redactSensitiveToken`).
+- Restricted remote URLs to GitHub HTTPS (port `443` only) and `git@github.com:<owner>/<repo>.git` SSH remotes while disabling dangerous Git transports (`-c protocol.file.allow=never`, blocking `file://`, `ext::`, `fd::`, `http://`), and enforced `GitHubAPIService` 2 MB response caps and `https://api.github.com` / `github.com` redirect allowlisting.
+- Enforced strict branch, commit SHA, project slug, and `validatedProjectRelativeFile` checks, `50 MB` per-file pre-commit limits, and symlink-free path containment across `projects/`, `project.json`, `mainTexFile`, `bibFile`, `createProject(copyFiguresFrom:)`, and conflict backup writes.
+
+### Fixed
+- Checked `git status --porcelain=v1 -uall` prior to bumping `updatedAt` timestamps in `project.json` and `.latexap-workspace.json` so repeated `⌘S` saves without file edits no longer produce metadata-only commits.
+- Drained `stdout` and `stderr` pipes concurrently in `GitRepositoryService.runGitRaw` to avoid pipe-buffer deadlocks on large diffs and file snapshots.
+- Cleared stale `activeProject`, `currentFileURL`, and dirty state consistently across `applyPaperSetupWizard`, empty-repository connections, project deletion, and repository disconnection.
+- Updated `AppMetadata` in `LaTeXaPApp` to `0.3.0` (Build `5`).
+
+---
+
 ## [0.2.0] — 2026-11-16
 
 ### Added — Academic Paper Authoring Suite

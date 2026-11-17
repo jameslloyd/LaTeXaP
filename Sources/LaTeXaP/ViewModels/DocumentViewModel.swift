@@ -9,8 +9,9 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var sourceText: String {
         didSet {
             if sourceText != oldValue {
+                refreshDirtyFlag()
                 refreshDerivedMetadata()
-                if autoCompileEnabled {
+                if autoCompileEnabled, !isInGitConflictState {
                     scheduleDebouncedCompilation()
                 }
             }
@@ -89,8 +90,9 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var managedBibContent: String = "" {
         didSet {
             if managedBibContent != oldValue {
+                refreshDirtyFlag()
                 refreshDerivedMetadata()
-                if autoCompileEnabled {
+                if autoCompileEnabled, !isInGitConflictState {
                     scheduleDebouncedCompilation()
                 }
             }
@@ -134,30 +136,62 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var submissionExportMessage: String?
     @Published public var lastExportedZipURL: URL?
 
+    // MARK: - GitHub Multi-Project Storage State (v0.3.0)
+    @Published public var connectedRepos: [GitHubRepoConnection] = []
+    @Published public var activeRepo: GitHubRepoConnection?
+    @Published public var repoProjects: [AcademicProjectDescriptor] = []
+    @Published public var activeProject: AcademicProjectDescriptor?
+    @Published public var gitSyncState: GitSyncState = .disconnected
+    @Published public var pendingProjectChanges: [GitFileChange] = []
+    @Published public var projectCommitHistory: [GitCommitRecord] = []
+    @Published public var showRepoSetupSheet: Bool = false
+    @Published public var showCommitMessagePopover: Bool = false
+    @Published public var showProjectHistorySheet: Bool = false
+    @Published public var showNewRepoProjectSheet: Bool = false
+    @Published public var commitMessageDraft: String = ""
+    @Published public var commitPushImmediately: Bool = true
+    @Published public var hasUnsavedBufferEdits: Bool = false
+    @Published public var repoStatusMessage: String?
+    @Published public var lastCommitSummary: String?
+    @Published public var availableGitHubRepos: [GitHubRemoteRepository] = []
+    @Published public var authenticatedGitHubUser: GitHubAuthenticatedUser?
+    @Published public var looseRepoTeXFiles: [String] = []
+
     private static let editorFontNameDefaultsKey = "LaTeXaP.editorFontName"
     private static let editorFontSizeDefaultsKey = "LaTeXaP.editorFontSize"
     private static let rubricTargetsDefaultsKey = "LaTeXaP.rubricTargets"
     private static let proseSpellCheckEnabledKey = "LaTeXaP.proseSpellCheckEnabled"
     private static let ignoredSpellingWordsKey = "LaTeXaP.ignoredSpellingWords"
+    private static let connectedGitHubReposKey = "LaTeXaP.connectedGitHubRepos"
+    private static let activeGitHubRepoIDKey = "LaTeXaP.activeGitHubRepoID"
+    private static let activeGitHubProjectIDKey = "LaTeXaP.activeGitHubProjectID"
 
     private let tectonicService = TectonicService()
     private let fontLibraryService: FontLibraryService
+    private let gitRepositoryService: GitRepositoryService
+    private let gitCredentialStore: any GitCredentialStore
     private let userDefaults: UserDefaults
     public let tempFiguresDirectory: URL
     private var debounceTask: Task<Void, Never>?
     private var lastCompilerDiagnostics: [LaTeXDiagnostic] = []
     private var lastRenderedPageCount: Int = 0
     private var ignoredSpellingWords: Set<String> = []
+    private var lastSavedSourceText: String = ""
+    private var lastSavedBibContent: String = ""
 
     public init(
         initialTemplate: LaTeXTemplate = LaTeXCatalog.defaultTemplate,
         fontLibraryService: FontLibraryService = FontLibraryService(),
         userDefaults: UserDefaults = .standard,
         tempFiguresDirectory: URL? = nil,
-        compileOnInit: Bool = true
+        compileOnInit: Bool = true,
+        gitRepositoryService: GitRepositoryService = GitRepositoryService(),
+        gitCredentialStore: any GitCredentialStore = GitKeychainService.shared
     ) {
         self.fontLibraryService = fontLibraryService
         self.userDefaults = userDefaults
+        self.gitRepositoryService = gitRepositoryService
+        self.gitCredentialStore = gitCredentialStore
         if let tempFiguresDirectory {
             self.tempFiguresDirectory = tempFiguresDirectory.standardizedFileURL
         } else {
@@ -171,6 +205,8 @@ public final class DocumentViewModel: ObservableObject {
         try? FileManager.default.createDirectory(at: self.tempFiguresDirectory, withIntermediateDirectories: true)
 
         self.sourceText = initialTemplate.content
+        self.lastSavedSourceText = initialTemplate.content
+        self.lastSavedBibContent = ""
         self.editorFontName = userDefaults.string(forKey: Self.editorFontNameDefaultsKey) ?? ""
         if userDefaults.object(forKey: Self.editorFontSizeDefaultsKey) != nil {
             let storedSize = userDefaults.double(forKey: Self.editorFontSizeDefaultsKey)
@@ -185,9 +221,28 @@ public final class DocumentViewModel: ObservableObject {
             self.ignoredSpellingWords = Set(storedIgnored)
         }
 
+        if let repoData = userDefaults.data(forKey: Self.connectedGitHubReposKey),
+           let decodedRepos = try? JSONDecoder().decode([GitHubRepoConnection].self, from: repoData) {
+            self.connectedRepos = decodedRepos
+            if let activeIDStr = userDefaults.string(forKey: Self.activeGitHubRepoIDKey),
+               let activeUUID = UUID(uuidString: activeIDStr),
+               let matched = decodedRepos.first(where: { $0.id == activeUUID }) {
+                self.activeRepo = matched
+                self.commitPushImmediately = matched.autoPushOnSave
+            } else {
+                self.activeRepo = decodedRepos.first
+                self.commitPushImmediately = decodedRepos.first?.autoPushOnSave ?? true
+            }
+        }
+
         self.customFonts = fontLibraryService.registerAllStoredFonts()
         refreshDerivedMetadata()
         if compileOnInit {
+            if let repoToRestore = activeRepo {
+                Task { [weak self] in
+                    await self?.restoreActiveRepoOnLaunch(repoToRestore)
+                }
+            }
             Task {
                 await compileNow()
             }
@@ -369,11 +424,13 @@ public final class DocumentViewModel: ObservableObject {
 
     public func loadTemplate(_ template: LaTeXTemplate) {
         currentFileURL = nil
+        activeProject = nil
         managedBibContent = ""
         bibSearchResults = []
         bibLookupError = nil
         lastExportedZipURL = nil
         sourceText = template.content
+        markSavedStateClean()
         Task {
             await compileNow()
         }
@@ -533,6 +590,7 @@ public final class DocumentViewModel: ObservableObject {
             return false
         }
         currentFileURL = url
+        activeProject = nil
         bibSearchResults = []
         bibLookupError = nil
         lastExportedZipURL = nil
@@ -545,6 +603,7 @@ public final class DocumentViewModel: ObservableObject {
             managedBibContent = ""
         }
         sourceText = loaded
+        markSavedStateClean()
         return true
     }
 
@@ -563,24 +622,27 @@ public final class DocumentViewModel: ObservableObject {
         }
     }
 
-    func persistDocumentAndAssets(to texURL: URL) {
+    func persistDocumentAndAssets(to texURL: URL, bibURL explicitBibURL: URL? = nil) {
         guard texURL.isFileURL, !Self.isSymbolicLinkPath(texURL) else { return }
         try? sourceText.write(to: texURL, atomically: true, encoding: .utf8)
         let docDir = texURL.deletingLastPathComponent()
         let fm = FileManager.default
 
-        // Sync references.bib beside saved .tex file when managedBibContent is non-empty
+        // Sync references.bib (or validated project bibFile) beside saved .tex file
         let trimmedBib = managedBibContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedBib.isEmpty {
-            let bibDest = docDir.appendingPathComponent("references.bib")
-            if !Self.isSymbolicLinkPath(bibDest) {
+        let bibDest = explicitBibURL ?? docDir.appendingPathComponent("references.bib")
+        if bibDest.isFileURL, !Self.isSymbolicLinkPath(bibDest) {
+            if !trimmedBib.isEmpty {
                 try? (trimmedBib + "\n").write(to: bibDest, atomically: true, encoding: .utf8)
+            } else if activeProject != nil, fm.fileExists(atPath: bibDest.path) {
+                try? "".write(to: bibDest, atomically: true, encoding: .utf8)
             }
         }
 
         // Migrate any TempFigures assets referenced in sourceText to <docDir>/figures/
         let figureRefs = AcademicPreflightService.extractFigurePaths(from: sourceText)
         guard !figureRefs.isEmpty else {
+            markSavedStateClean()
             refreshDerivedMetadata()
             return
         }
@@ -620,6 +682,7 @@ public final class DocumentViewModel: ObservableObject {
             }
         }
         refreshDerivedMetadata()
+        markSavedStateClean()
     }
 
     public func exportPDF() {
@@ -1054,10 +1117,12 @@ public final class DocumentViewModel: ObservableObject {
 
     public func applyPaperSetupWizard(_ config: PaperSetupConfig) {
         currentFileURL = nil
+        activeProject = nil
         selectedBibliographyStyle = config.bibliographyStyle
         isDoubleSpacedEnabled = config.doubleSpacing
         isBlindReviewEnabled = config.anonymizedBlindReview
         sourceText = LaTeXCatalog.generateWizardDocument(from: config)
+        markSavedStateClean()
         if autoCompileEnabled {
             Task { await compileNow() }
         }
@@ -1113,6 +1178,7 @@ public final class DocumentViewModel: ObservableObject {
             userDefaults.set(encoded, forKey: Self.rubricTargetsDefaultsKey)
         }
         refreshDerivedMetadata()
+        markSavedStateClean()
     }
 
     public func applyAcademicFix(_ op: AcademicFixOperation) {
@@ -1348,5 +1414,697 @@ public final class DocumentViewModel: ObservableObject {
             }
         }
         return "figures/\(safeLeaf)"
+    }
+
+    // MARK: - GitHub Repository Multi-Project Storage Actions (v0.3.0)
+
+    public var isInGitConflictState: Bool {
+        if case .conflict = gitSyncState {
+            return true
+        }
+        return false
+    }
+
+    public var defaultCommitMessagePreview: String {
+        GitHubWorkspaceValidator.defaultCommitMessage(projectName: activeProject?.displayName ?? "Project")
+    }
+
+    private func refreshDirtyFlag() {
+        hasUnsavedBufferEdits = (sourceText != lastSavedSourceText) || (managedBibContent != lastSavedBibContent)
+    }
+
+    private func markSavedStateClean() {
+        lastSavedSourceText = sourceText
+        lastSavedBibContent = managedBibContent
+        hasUnsavedBufferEdits = false
+    }
+
+    public func detectAndTestGitHubCLI() async -> GitHubAuthenticatedUser? {
+        let store = gitCredentialStore
+        let token = await Task.detached(priority: .userInitiated) {
+            store.detectGitHubCLIToken()
+        }.value
+        guard let token, !token.isEmpty else {
+            authenticatedGitHubUser = nil
+            return nil
+        }
+        do {
+            let user = try await GitHubAPIService.fetchAuthenticatedUser(token: token)
+            authenticatedGitHubUser = user
+            if let repos = try? await GitHubAPIService.listUserRepositories(token: token) {
+                availableGitHubRepos = repos
+            }
+            return user
+        } catch {
+            repoStatusMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    public func validateAndFetchGitHubRepos(token: String) async throws -> [GitHubRemoteRepository] {
+        let user = try await GitHubAPIService.fetchAuthenticatedUser(token: token)
+        authenticatedGitHubUser = user
+        let repos = try await GitHubAPIService.listUserRepositories(token: token)
+        availableGitHubRepos = repos
+        return repos
+    }
+
+    public func saveDocument() {
+        if activeRepo != nil && activeProject != nil {
+            Task { [weak self] in
+                await self?.saveAndCommitCurrentProject(customMessage: nil, pushImmediately: nil)
+            }
+        } else {
+            saveTexFile(saveAs: false)
+        }
+    }
+
+    public func connectGitHubRepository(
+        remoteURL: String,
+        branch: String = "main",
+        authMethod: GitAuthMethod = .personalAccessToken,
+        token: String? = nil,
+        autoPushOnSave: Bool = true,
+        includePDFsInCommits: Bool = false
+    ) async {
+        guard let parsed = await gitRepositoryService.parseRemoteURL(remoteURL) else {
+            gitSyncState = .failed(message: "Enter a valid GitHub repository URL (https://github.com/owner/repo or owner/repo).")
+            repoStatusMessage = "Invalid GitHub repository URL."
+            return
+        }
+        guard let validBranch = GitHubWorkspaceValidator.validatedBranchName(branch) else {
+            gitSyncState = .failed(message: "Invalid branch name '\(branch)'.")
+            repoStatusMessage = "Invalid branch name."
+            return
+        }
+
+        let cleanFolder = "\(parsed.owner)-\(parsed.repo)"
+        let connection = GitHubRepoConnection(
+            owner: parsed.owner,
+            repoName: parsed.repo,
+            remoteURLString: parsed.normalizedURL,
+            branch: validBranch,
+            authMethod: authMethod,
+            localFolderName: cleanFolder,
+            autoPushOnSave: autoPushOnSave,
+            includePDFsInCommits: includePDFsInCommits,
+            lastSyncedAt: nil
+        )
+
+        if authMethod == .personalAccessToken,
+           let cleanToken = token?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cleanToken.isEmpty {
+            do {
+                try gitCredentialStore.saveToken(cleanToken, forAccount: connection.fullName)
+            } catch {
+                gitSyncState = .failed(message: error.localizedDescription)
+                repoStatusMessage = error.localizedDescription
+                return
+            }
+        }
+
+        gitSyncState = .syncing(status: "Cloning \(connection.fullName)...")
+        repoStatusMessage = nil
+
+        do {
+            let outcome = try await gitRepositoryService.cloneOrOpenRepository(connection: connection, token: token)
+            var updatedConn = connection
+            if case .idle(_, _, let lastSync) = outcome.syncState {
+                updatedConn.lastSyncedAt = lastSync
+            }
+            upsertConnectedRepo(updatedConn)
+            activeRepo = updatedConn
+            commitPushImmediately = updatedConn.autoPushOnSave
+            repoProjects = outcome.manifest.projects
+            looseRepoTeXFiles = outcome.looseTeXPaths
+            gitSyncState = outcome.syncState
+            persistConnectedRepos()
+
+            if let first = outcome.manifest.projects.first {
+                await openProjectFromActiveRepo(first)
+            } else {
+                activeProject = nil
+                currentFileURL = nil
+                pendingProjectChanges = []
+                projectCommitHistory = []
+                userDefaults.removeObject(forKey: Self.activeGitHubProjectIDKey)
+            }
+            repoStatusMessage = "Connected to \(updatedConn.fullName)."
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func createAndConnectGitHubRepository(
+        name: String,
+        description: String = "",
+        isPrivate: Bool = true,
+        branch: String = "main",
+        token: String,
+        autoPushOnSave: Bool = true,
+        includePDFsInCommits: Bool = false
+    ) async {
+        gitSyncState = .syncing(status: "Creating repository '\(name)' on GitHub...")
+        repoStatusMessage = nil
+        do {
+            let created = try await GitHubAPIService.createRepository(
+                name: name,
+                description: description,
+                isPrivate: isPrivate,
+                autoInit: true,
+                token: token
+            )
+            await connectGitHubRepository(
+                remoteURL: created.cloneURL,
+                branch: created.defaultBranch.isEmpty ? branch : created.defaultBranch,
+                authMethod: .personalAccessToken,
+                token: token,
+                autoPushOnSave: autoPushOnSave,
+                includePDFsInCommits: includePDFsInCommits
+            )
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func switchActiveRepo(_ repo: GitHubRepoConnection) async {
+        activeRepo = repo
+        commitPushImmediately = repo.autoPushOnSave
+        persistConnectedRepos()
+        await restoreActiveRepoOnLaunch(repo)
+    }
+
+    public func updateActiveRepoSettings(autoPushOnSave: Bool, includePDFsInCommits: Bool) async {
+        guard var repo = activeRepo else { return }
+        repo.autoPushOnSave = autoPushOnSave
+        repo.includePDFsInCommits = includePDFsInCommits
+        upsertConnectedRepo(repo)
+        activeRepo = repo
+        commitPushImmediately = autoPushOnSave
+        persistConnectedRepos()
+
+        if let repoURL = try? await gitRepositoryService.localRepositoryURL(for: repo) {
+            try? await gitRepositoryService.updateGitIgnore(in: repoURL, includePDFs: includePDFsInCommits)
+        }
+    }
+
+    public func disconnectRepo(_ repo: GitHubRepoConnection, deleteLocalClone: Bool = false) {
+        try? gitCredentialStore.deleteToken(forAccount: repo.fullName)
+        connectedRepos.removeAll { $0.id == repo.id }
+        if activeRepo?.id == repo.id {
+            activeRepo = connectedRepos.first
+            repoProjects = []
+            activeProject = nil
+            currentFileURL = nil
+            pendingProjectChanges = []
+            projectCommitHistory = []
+            looseRepoTeXFiles = []
+            userDefaults.removeObject(forKey: Self.activeGitHubProjectIDKey)
+            gitSyncState = activeRepo == nil ? .disconnected : .idle(aheadCount: 0, behindCount: 0, lastSync: activeRepo?.lastSyncedAt)
+            if let nextRepo = activeRepo {
+                commitPushImmediately = nextRepo.autoPushOnSave
+                Task { [weak self] in
+                    await self?.restoreActiveRepoOnLaunch(nextRepo)
+                }
+            }
+        }
+        persistConnectedRepos()
+
+        if deleteLocalClone {
+            Task { [gitRepositoryService] in
+                if let url = try? await gitRepositoryService.localRepositoryURL(for: repo) {
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
+        }
+    }
+
+    public func createProjectInActiveRepo(
+        displayName: String,
+        customSlug: String? = nil,
+        template: LaTeXTemplate = LaTeXCatalog.defaultTemplate,
+        importCurrentDocument: Bool = false
+    ) async {
+        guard let repo = activeRepo else {
+            repoStatusMessage = "Connect a GitHub repository first."
+            return
+        }
+        gitSyncState = .committing
+        repoStatusMessage = nil
+
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let mainText = importCurrentDocument ? sourceText : template.content
+            let bibText = importCurrentDocument ? managedBibContent : ""
+            let outcome = try await gitRepositoryService.createProject(
+                in: repoURL,
+                connection: repo,
+                displayName: displayName,
+                customSlug: customSlug,
+                mainContent: mainText,
+                bibContent: bibText,
+                templateId: importCurrentDocument ? nil : template.id,
+                rubricTargets: rubricTargets,
+                copyFiguresFrom: importCurrentDocument ? tempFiguresDirectory : nil,
+                token: nil
+            )
+            repoProjects = outcome.manifest.projects
+            gitSyncState = outcome.syncState
+            if case .idle(_, _, let syncedAt) = outcome.syncState, let syncedAt {
+                var updatedRepo = repo
+                updatedRepo.lastSyncedAt = syncedAt
+                upsertConnectedRepo(updatedRepo)
+                activeRepo = updatedRepo
+                persistConnectedRepos()
+            }
+            await openProjectFromActiveRepo(outcome.project)
+            repoStatusMessage = "Created project '\(outcome.project.displayName)'."
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func importExistingTeXFileAsProject(relativeTeXPath: String, displayName: String) async {
+        guard let repo = activeRepo else { return }
+        gitSyncState = .committing
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let outcome = try await gitRepositoryService.importLooseTeXFileIntoProject(
+                in: repoURL,
+                connection: repo,
+                relativeTeXPath: relativeTeXPath,
+                displayName: displayName,
+                token: nil
+            )
+            repoProjects = outcome.manifest.projects
+            gitSyncState = outcome.syncState
+            await openProjectFromActiveRepo(outcome.project)
+            await loadProjectCommitHistory()
+            repoStatusMessage = "Imported '\(relativeTeXPath)' into project '\(outcome.project.displayName)'."
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    private static func hasSymlinkAlongRelativePath(_ relativePath: String, baseDir: URL) -> Bool {
+        var cursor = baseDir.standardizedFileURL
+        for part in relativePath.split(separator: "/").map(String.init) {
+            cursor = cursor.appendingPathComponent(part).standardizedFileURL
+            if isSymbolicLinkPath(cursor) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func validatedProjectFilePaths(
+        in repoURL: URL,
+        project: AcademicProjectDescriptor
+    ) -> (projectDir: URL, mainURL: URL, bibURL: URL)? {
+        guard GitHubWorkspaceValidator.isValidProjectSlug(project.slug),
+              project.relativePath == "projects/\(project.slug)",
+              let mainRel = GitHubWorkspaceValidator.validatedProjectRelativeFile(project.mainTexFile, allowedExtensions: ["tex"]),
+              let bibRel = GitHubWorkspaceValidator.validatedProjectRelativeFile(project.bibFile, allowedExtensions: ["bib"]) else {
+            return nil
+        }
+
+        let stdRepo = repoURL.standardizedFileURL
+        let projectsRoot = stdRepo.appendingPathComponent("projects", isDirectory: true).standardizedFileURL
+        let projectDir = projectsRoot.appendingPathComponent(project.slug, isDirectory: true).standardizedFileURL
+        guard !isSymbolicLinkPath(stdRepo),
+              !isSymbolicLinkPath(projectsRoot),
+              !isSymbolicLinkPath(projectDir),
+              !hasSymlinkAlongRelativePath(mainRel, baseDir: projectDir),
+              !hasSymlinkAlongRelativePath(bibRel, baseDir: projectDir) else {
+            return nil
+        }
+
+        let resolvedRepo = stdRepo.resolvingSymlinksInPath().path
+        let repoPrefix = resolvedRepo.hasSuffix("/") ? resolvedRepo : resolvedRepo + "/"
+        let resolvedProject = projectDir.resolvingSymlinksInPath().path
+        guard resolvedProject.hasPrefix(repoPrefix) else {
+            return nil
+        }
+
+        let mainURL = projectDir.appendingPathComponent(mainRel).standardizedFileURL
+        let bibURL = projectDir.appendingPathComponent(bibRel).standardizedFileURL
+        let projPrefix = resolvedProject.hasSuffix("/") ? resolvedProject : resolvedProject + "/"
+        guard mainURL.resolvingSymlinksInPath().path.hasPrefix(projPrefix),
+              bibURL.resolvingSymlinksInPath().path.hasPrefix(projPrefix) else {
+            return nil
+        }
+
+        return (projectDir, mainURL, bibURL)
+    }
+
+    public func openProjectFromActiveRepo(_ project: AcademicProjectDescriptor) async {
+        guard let repo = activeRepo else { return }
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            guard let paths = Self.validatedProjectFilePaths(in: repoURL, project: project) else {
+                repoStatusMessage = "Refused to open unsafe or symlinked path inside repository project."
+                return
+            }
+
+            let loadedMain = (try? String(contentsOf: paths.mainURL, encoding: .utf8)) ?? ""
+            let loadedBib = (try? String(contentsOf: paths.bibURL, encoding: .utf8)) ?? ""
+
+            activeProject = project
+            currentFileURL = paths.mainURL
+            bibSearchResults = []
+            bibLookupError = nil
+            lastExportedZipURL = nil
+            if let projRubric = project.rubricTargets {
+                rubricTargets = projRubric
+            }
+            managedBibContent = loadedBib
+            sourceText = loadedMain
+            markSavedStateClean()
+            userDefaults.set(project.id.uuidString, forKey: Self.activeGitHubProjectIDKey)
+
+            pendingProjectChanges = (try? await gitRepositoryService.changedFiles(in: repoURL, projectRelativePath: project.relativePath)) ?? []
+            await loadProjectCommitHistory()
+            if autoCompileEnabled, !isInGitConflictState {
+                await compileNow()
+            }
+        } catch {
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func discardUnsavedProjectEdits() async {
+        if let project = activeProject {
+            await openProjectFromActiveRepo(project)
+        }
+    }
+
+    public func deleteProjectFromActiveRepo(_ project: AcademicProjectDescriptor, commitMessage: String? = nil) async {
+        guard let repo = activeRepo else { return }
+        gitSyncState = .committing
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let outcome = try await gitRepositoryService.deleteProject(
+                in: repoURL,
+                connection: repo,
+                project: project,
+                commitMessage: commitMessage,
+                token: nil
+            )
+            repoProjects = outcome.manifest.projects
+            gitSyncState = outcome.syncState
+            if activeProject?.id == project.id {
+                activeProject = nil
+                currentFileURL = nil
+                pendingProjectChanges = []
+                projectCommitHistory = []
+                userDefaults.removeObject(forKey: Self.activeGitHubProjectIDKey)
+                if let next = repoProjects.first {
+                    await openProjectFromActiveRepo(next)
+                }
+            }
+            repoStatusMessage = "Deleted project '\(project.displayName)'."
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func saveActiveDocumentAndCommit(customMessage: String? = nil, push: Bool? = nil) async {
+        await saveAndCommitCurrentProject(customMessage: customMessage, pushImmediately: push)
+    }
+
+    public func saveAndCommitCurrentProject(customMessage: String? = nil, pushImmediately: Bool? = nil) async {
+        guard var repo = activeRepo, let project = activeProject else {
+            saveTexFile(saveAs: false)
+            return
+        }
+
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            guard let paths = Self.validatedProjectFilePaths(in: repoURL, project: project) else {
+                gitSyncState = .failed(message: "Refused to save to unsafe or symlinked project path.")
+                repoStatusMessage = "Refused to save to unsafe or symlinked project path."
+                return
+            }
+            currentFileURL = paths.mainURL
+            persistDocumentAndAssets(to: paths.mainURL, bibURL: paths.bibURL)
+
+            let defaultMsg = GitHubWorkspaceValidator.defaultCommitMessage(projectName: project.displayName)
+            let chosenMsg = (customMessage?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? defaultMsg
+            let shouldPush = pushImmediately ?? repo.autoPushOnSave
+
+            gitSyncState = .committing
+            let result = try await gitRepositoryService.commitProjectChanges(
+                in: repoURL,
+                connection: repo,
+                project: project,
+                message: chosenMsg,
+                pushAfterCommit: shouldPush,
+                token: nil
+            )
+
+            if case .idle(_, _, let syncedAt) = result.syncState, let syncedAt {
+                repo.lastSyncedAt = syncedAt
+                upsertConnectedRepo(repo)
+                activeRepo = repo
+                persistConnectedRepos()
+            }
+
+            gitSyncState = result.syncState
+            let discovery = try await gitRepositoryService.discoverProjects(
+                in: repoURL,
+                defaultBranch: repo.branch,
+                repoFullName: repo.fullName
+            )
+            repoProjects = discovery.manifest.projects
+            if let updatedProj = repoProjects.first(where: { $0.slug == project.slug }) {
+                activeProject = updatedProj
+            }
+            pendingProjectChanges = (try? await gitRepositoryService.changedFiles(in: repoURL, projectRelativePath: project.relativePath)) ?? []
+            await loadProjectCommitHistory()
+
+            if result.committed {
+                lastCommitSummary = chosenMsg
+                if case .offlinePendingPush = result.syncState {
+                    repoStatusMessage = "Saved & committed locally (offline, push pending)."
+                } else if case .conflict = result.syncState {
+                    repoStatusMessage = "Commit saved locally, but remote changes caused a merge conflict."
+                } else {
+                    repoStatusMessage = "Committed \"\(chosenMsg)\"."
+                }
+            } else {
+                repoStatusMessage = "No changes to commit in \(project.displayName)."
+            }
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func prepareCustomCommitPopover() async {
+        guard let repo = activeRepo, let project = activeProject else { return }
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            guard let paths = Self.validatedProjectFilePaths(in: repoURL, project: project) else {
+                repoStatusMessage = "Refused to stage unsafe or symlinked project path."
+                return
+            }
+            currentFileURL = paths.mainURL
+            persistDocumentAndAssets(to: paths.mainURL, bibURL: paths.bibURL)
+            pendingProjectChanges = try await gitRepositoryService.changedFiles(in: repoURL, projectRelativePath: project.relativePath)
+            commitMessageDraft = GitHubWorkspaceValidator.defaultCommitMessage(projectName: project.displayName)
+            commitPushImmediately = repo.autoPushOnSave
+            showCommitMessagePopover = true
+        } catch {
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func syncActiveRepository() async {
+        guard var repo = activeRepo else { return }
+        gitSyncState = .syncing(status: "Syncing with GitHub...")
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let token = effectiveStoredToken(for: repo)
+            let state = await gitRepositoryService.syncRepository(
+                in: repoURL,
+                branch: repo.branch,
+                token: token,
+                authMethod: repo.authMethod
+            )
+            gitSyncState = state
+            if case .idle(_, _, let syncedAt) = state, let syncedAt {
+                repo.lastSyncedAt = syncedAt
+                upsertConnectedRepo(repo)
+                activeRepo = repo
+                persistConnectedRepos()
+            }
+            let discovery = try await gitRepositoryService.discoverProjects(
+                in: repoURL,
+                defaultBranch: repo.branch,
+                repoFullName: repo.fullName
+            )
+            repoProjects = discovery.manifest.projects
+            looseRepoTeXFiles = discovery.looseTeXPaths
+            if let currentSlug = activeProject?.slug,
+               let refreshedProj = repoProjects.first(where: { $0.slug == currentSlug }) {
+                await openProjectFromActiveRepo(refreshedProj)
+            }
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func loadProjectCommitHistory() async {
+        guard let repo = activeRepo, let project = activeProject else {
+            projectCommitHistory = []
+            return
+        }
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            projectCommitHistory = try await gitRepositoryService.projectHistory(
+                in: repoURL,
+                projectRelativePath: project.relativePath,
+                limit: 50
+            )
+        } catch {
+            projectCommitHistory = []
+        }
+    }
+
+    public func previewFileAtCommit(_ commit: GitCommitRecord, relativeFilePath: String) async -> String? {
+        guard let repo = activeRepo else { return nil }
+        guard let repoURL = try? await gitRepositoryService.localRepositoryURL(for: repo) else { return nil }
+        return try? await gitRepositoryService.fileContentAtCommit(
+            in: repoURL,
+            commitSHA: commit.id,
+            relativeFilePath: relativeFilePath
+        )
+    }
+
+    public func previewDiffAtCommit(_ commit: GitCommitRecord) async -> String {
+        guard let repo = activeRepo, let project = activeProject else { return "" }
+        guard let repoURL = try? await gitRepositoryService.localRepositoryURL(for: repo) else { return "" }
+        return (try? await gitRepositoryService.commitDiff(
+            in: repoURL,
+            commitSHA: commit.id,
+            projectRelativePath: project.relativePath
+        )) ?? ""
+    }
+
+    public func restoreProjectToCommit(_ commit: GitCommitRecord) async {
+        guard let repo = activeRepo, let project = activeProject else { return }
+        gitSyncState = .committing
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let state = try await gitRepositoryService.restoreProjectToCommit(
+                in: repoURL,
+                connection: repo,
+                project: project,
+                commit: commit,
+                pushAfterRestore: repo.autoPushOnSave,
+                token: nil
+            )
+            gitSyncState = state
+            await openProjectFromActiveRepo(project)
+            repoStatusMessage = "Restored '\(project.displayName)' to version \(commit.shortHash)."
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    public func resolveConflictFile(_ relativePath: String, choice: GitConflictResolutionChoice) async {
+        await resolveConflicts([relativePath: choice], keepBothCopies: false)
+    }
+
+    public func resolveConflictKeepBoth() async {
+        guard case .conflict(let files, _) = gitSyncState else { return }
+        var map: [String: GitConflictResolutionChoice] = [:]
+        for f in files {
+            map[f] = .keepLocal
+        }
+        await resolveConflicts(map, keepBothCopies: true)
+    }
+
+    public func resolveConflicts(
+        _ choices: [String: GitConflictResolutionChoice],
+        keepBothCopies: Bool = false
+    ) async {
+        guard let repo = activeRepo, let project = activeProject else { return }
+        gitSyncState = .syncing(status: "Resolving conflicts...")
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let state = try await gitRepositoryService.resolveConflict(
+                in: repoURL,
+                connection: repo,
+                project: project,
+                choices: choices,
+                keepBothCopies: keepBothCopies,
+                token: nil
+            )
+            gitSyncState = state
+            await openProjectFromActiveRepo(project)
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+            repoStatusMessage = error.localizedDescription
+        }
+    }
+
+    private func restoreActiveRepoOnLaunch(_ repo: GitHubRepoConnection) async {
+        do {
+            let repoURL = try await gitRepositoryService.localRepositoryURL(for: repo)
+            let discovery = try await gitRepositoryService.discoverProjects(
+                in: repoURL,
+                defaultBranch: repo.branch,
+                repoFullName: repo.fullName
+            )
+            repoProjects = discovery.manifest.projects
+            looseRepoTeXFiles = discovery.looseTeXPaths
+            gitSyncState = .idle(aheadCount: 0, behindCount: 0, lastSync: repo.lastSyncedAt)
+            let preferredID = userDefaults.string(forKey: Self.activeGitHubProjectIDKey).flatMap(UUID.init(uuidString:))
+            if let match = repoProjects.first(where: { $0.id == preferredID }) ?? repoProjects.first {
+                await openProjectFromActiveRepo(match)
+            }
+        } catch {
+            gitSyncState = .failed(message: error.localizedDescription)
+        }
+    }
+
+    private func upsertConnectedRepo(_ repo: GitHubRepoConnection) {
+        if let idx = connectedRepos.firstIndex(where: { $0.id == repo.id || $0.fullName.caseInsensitiveCompare(repo.fullName) == .orderedSame }) {
+            connectedRepos[idx] = repo
+        } else {
+            connectedRepos.append(repo)
+        }
+    }
+
+    private func persistConnectedRepos() {
+        if let encoded = try? JSONEncoder().encode(connectedRepos) {
+            userDefaults.set(encoded, forKey: Self.connectedGitHubReposKey)
+        }
+        if let activeID = activeRepo?.id.uuidString {
+            userDefaults.set(activeID, forKey: Self.activeGitHubRepoIDKey)
+        } else {
+            userDefaults.removeObject(forKey: Self.activeGitHubRepoIDKey)
+        }
+    }
+
+    private func effectiveStoredToken(for connection: GitHubRepoConnection) -> String? {
+        switch connection.authMethod {
+        case .personalAccessToken:
+            return gitCredentialStore.loadToken(forAccount: connection.fullName)
+                ?? gitCredentialStore.loadToken(forAccount: "github.com")
+        case .ghCLI:
+            return gitCredentialStore.detectGitHubCLIToken()
+                ?? gitCredentialStore.loadToken(forAccount: connection.fullName)
+        case .sshKey:
+            return nil
+        }
     }
 }
