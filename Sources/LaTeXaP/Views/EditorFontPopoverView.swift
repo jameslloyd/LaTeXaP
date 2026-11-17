@@ -55,6 +55,30 @@ public struct EditorFontPopoverView: View {
                 .accessibilityHint("Restores System Monospaced font at 13.5 points")
             }
 
+            // Editing Pane Theme (Light / Dark)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Editing Pane Theme")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(viewModel.useLightEditorBackground ? "Light" : "Dark")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Picker("Editing Pane Theme", selection: $viewModel.useLightEditorBackground) {
+                    Label("Light", systemImage: "sun.max.fill").tag(true)
+                    Label("Dark", systemImage: "moon.fill").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .accessibilityLabel("Editing pane color theme")
+            }
+            .padding(10)
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
             // Font size controls
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
@@ -108,11 +132,20 @@ public struct EditorFontPopoverView: View {
                         size: min(16, max(11, viewModel.editorFontSize)),
                         weight: .regular
                     )))
+                    .foregroundStyle(
+                        viewModel.useLightEditorBackground
+                            ? Color(red: 0.06, green: 0.09, blue: 0.16)
+                            : Color(red: 0.94, green: 0.96, blue: 0.99)
+                    )
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
-                    .background(Color(NSColor.textBackgroundColor))
+                    .background(
+                        viewModel.useLightEditorBackground
+                            ? Color.white
+                            : Color(red: 0.05, green: 0.07, blue: 0.09)
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)

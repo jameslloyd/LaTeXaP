@@ -197,6 +197,11 @@ struct LaTeXaPApp: App {
             }
 
             CommandMenu("View") {
+                Picker("Editing Pane Theme", selection: $viewModel.useLightEditorBackground) {
+                    Text("Light Theme").tag(true)
+                    Text("Dark Theme").tag(false)
+                }
+
                 Toggle("Light Editor Background", isOn: $viewModel.useLightEditorBackground)
 
                 Toggle("Prose Spellcheck", isOn: $viewModel.proseSpellCheckEnabled)

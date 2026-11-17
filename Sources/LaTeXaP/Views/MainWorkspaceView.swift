@@ -152,11 +152,7 @@ public struct MainWorkspaceView: View {
             ToolbarItemGroup(placement: .principal) {
                 compilationBadge
 
-                Toggle(isOn: $viewModel.autoCompileEnabled) {
-                    Label("Live Render", systemImage: "bolt.fill")
-                }
-                .toggleStyle(.button)
-                .help("Automatically compile PDF as you type")
+                autoCompileToolbarButton
 
                 Button {
                     Task { await viewModel.compileNow() }
@@ -1386,17 +1382,7 @@ public struct MainWorkspaceView: View {
                 .accessibilityValue("\(viewModel.editorFontName.isEmpty ? "System Monospaced" : viewModel.editorFontName), \(String(format: "%.1f", viewModel.editorFontSize)) points")
                 .accessibilityHint("Opens popover to select editor font family and size")
 
-                Button {
-                    viewModel.useLightEditorBackground.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: viewModel.useLightEditorBackground ? "sun.max.fill" : "moon.fill")
-                        Text(viewModel.useLightEditorBackground ? "Light" : "Dark")
-                    }
-                    .font(.system(size: 10.5, weight: .medium))
-                }
-                .buttonStyle(.borderless)
-                .help("Switch LaTeX Editor between Crisp White Paper and High-Contrast Dark background")
+                editorThemeSegmentedControl
 
                 Text("Line \(viewModel.cursorLine)")
                     .font(.system(size: 11, design: .monospaced))
@@ -1448,9 +1434,50 @@ public struct MainWorkspaceView: View {
                 Text("Live PDF Preview")
                     .font(.system(size: 12, weight: .semibold))
 
+                Button {
+                    viewModel.autoCompileEnabled.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(viewModel.autoCompileEnabled ? Color.green : Color.secondary.opacity(0.45))
+                            .frame(width: 6, height: 6)
+                        Image(systemName: viewModel.autoCompileEnabled ? "bolt.fill" : "bolt.slash")
+                            .foregroundStyle(viewModel.autoCompileEnabled ? Color.green : Color.secondary)
+                        Text(viewModel.autoCompileEnabled ? "Auto-Compile Active" : "Auto-Compile Paused")
+                            .foregroundStyle(viewModel.autoCompileEnabled ? Color.primary : Color.secondary)
+                    }
+                    .font(.system(size: 10.5, weight: viewModel.autoCompileEnabled ? .semibold : .medium))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        viewModel.autoCompileEnabled
+                            ? Color.green.opacity(0.15)
+                            : Color.secondary.opacity(0.10)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(
+                                viewModel.autoCompileEnabled
+                                    ? Color.green.opacity(0.55)
+                                    : Color.secondary.opacity(0.22),
+                                lineWidth: 1
+                            )
+                    )
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(
+                    viewModel.autoCompileEnabled
+                        ? "Automatically compile PDF as you type is ACTIVE — click to pause"
+                        : "Automatically compile PDF as you type is PAUSED — click to enable"
+                )
+                .accessibilityLabel("Automatically compile PDF as you type")
+                .accessibilityValue(viewModel.autoCompileEnabled ? "Active" : "Paused")
+
                 Text("(⌘-Click in PDF to jump to source line)")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
 
                 Spacer()
 
@@ -1503,6 +1530,121 @@ public struct MainWorkspaceView: View {
     }
 
     // MARK: - Badges & Status Bar
+
+    private var autoCompileToolbarButton: some View {
+        Button {
+            viewModel.autoCompileEnabled.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(viewModel.autoCompileEnabled ? Color.green : Color.secondary.opacity(0.45))
+                    .frame(width: 7, height: 7)
+                Image(systemName: viewModel.autoCompileEnabled ? "bolt.fill" : "bolt.slash")
+                    .foregroundStyle(viewModel.autoCompileEnabled ? Color.green : Color.secondary)
+                Text(viewModel.autoCompileEnabled ? "Auto-Compile: ON" : "Auto-Compile: OFF")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(viewModel.autoCompileEnabled ? Color.primary : Color.secondary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                viewModel.autoCompileEnabled
+                    ? Color.green.opacity(0.18)
+                    : Color.secondary.opacity(0.10)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        viewModel.autoCompileEnabled
+                            ? Color.green.opacity(0.65)
+                            : Color.secondary.opacity(0.25),
+                        lineWidth: 1
+                    )
+            )
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help(
+            viewModel.autoCompileEnabled
+                ? "Automatically compile PDF as you type (ACTIVE — click to pause live compilation)"
+                : "Automatically compile PDF as you type (OFF — click to enable live compilation)"
+        )
+        .accessibilityLabel("Automatically compile PDF as you type")
+        .accessibilityValue(viewModel.autoCompileEnabled ? "Active" : "Off")
+    }
+
+    private var editorThemeSegmentedControl: some View {
+        HStack(spacing: 2) {
+            Button {
+                viewModel.useLightEditorBackground = true
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "sun.max.fill")
+                        .foregroundStyle(viewModel.useLightEditorBackground ? Color.orange : Color.secondary)
+                    Text("Light")
+                }
+                .font(.system(size: 10.5, weight: viewModel.useLightEditorBackground ? .semibold : .medium))
+                .foregroundStyle(viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2.5)
+                .background(
+                    viewModel.useLightEditorBackground
+                        ? Color.accentColor.opacity(0.18)
+                        : Color.clear
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            viewModel.useLightEditorBackground ? Color.accentColor.opacity(0.55) : Color.clear,
+                            lineWidth: 1
+                        )
+                )
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Switch LaTeX editing pane to Light theme")
+            .accessibilityLabel("Editing pane Light theme")
+            .accessibilityValue(viewModel.useLightEditorBackground ? "Selected" : "Not selected")
+
+            Button {
+                viewModel.useLightEditorBackground = false
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "moon.fill")
+                        .foregroundStyle(!viewModel.useLightEditorBackground ? Color.indigo : Color.secondary)
+                    Text("Dark")
+                }
+                .font(.system(size: 10.5, weight: !viewModel.useLightEditorBackground ? .semibold : .medium))
+                .foregroundStyle(!viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2.5)
+                .background(
+                    !viewModel.useLightEditorBackground
+                        ? Color.accentColor.opacity(0.18)
+                        : Color.clear
+                )
+                .overlay(
+                    Capsule()
+                        .stroke(
+                            !viewModel.useLightEditorBackground ? Color.accentColor.opacity(0.55) : Color.clear,
+                            lineWidth: 1
+                        )
+                )
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Switch LaTeX editing pane to Dark theme")
+            .accessibilityLabel("Editing pane Dark theme")
+            .accessibilityValue(!viewModel.useLightEditorBackground ? "Selected" : "Not selected")
+        }
+        .padding(2)
+        .background(Color.secondary.opacity(0.10))
+        .overlay(
+            Capsule()
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+        )
+        .clipShape(Capsule())
+    }
 
     @ViewBuilder
     private var compilationBadge: some View {

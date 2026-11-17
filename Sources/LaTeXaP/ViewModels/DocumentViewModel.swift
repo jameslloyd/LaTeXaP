@@ -36,7 +36,14 @@ public final class DocumentViewModel: ObservableObject {
     @Published public var documentLabels: [DocumentLabelItem] = []
     @Published public var documentStats: DocumentStats = DocumentStats()
 
-    @Published public var autoCompileEnabled: Bool = true
+    @Published public var autoCompileEnabled: Bool = true {
+        didSet {
+            userDefaults.set(autoCompileEnabled, forKey: Self.autoCompileEnabledDefaultsKey)
+            if autoCompileEnabled, !oldValue, !isInGitConflictState {
+                scheduleDebouncedCompilation()
+            }
+        }
+    }
     @Published public var showConsoleDrawer: Bool = true
     @Published public var showSidebar: Bool = true
     @Published public var editorFontSize: CGFloat = 13.5 {
@@ -49,7 +56,11 @@ public final class DocumentViewModel: ObservableObject {
             userDefaults.set(Double(clamped), forKey: Self.editorFontSizeDefaultsKey)
         }
     }
-    @Published public var useLightEditorBackground: Bool = true
+    @Published public var useLightEditorBackground: Bool = true {
+        didSet {
+            userDefaults.set(useLightEditorBackground, forKey: Self.useLightEditorBackgroundDefaultsKey)
+        }
+    }
     @Published public var selectedSidebarTab: String = "Outline"
     @Published public var packageSearchText: String = ""
     @Published public var selectedDiagnosticTab: Int = 2
@@ -159,6 +170,8 @@ public final class DocumentViewModel: ObservableObject {
 
     private static let editorFontNameDefaultsKey = "LaTeXaP.editorFontName"
     private static let editorFontSizeDefaultsKey = "LaTeXaP.editorFontSize"
+    private static let autoCompileEnabledDefaultsKey = "LaTeXaP.autoCompileEnabled"
+    private static let useLightEditorBackgroundDefaultsKey = "LaTeXaP.useLightEditorBackground"
     private static let rubricTargetsDefaultsKey = "LaTeXaP.rubricTargets"
     private static let proseSpellCheckEnabledKey = "LaTeXaP.proseSpellCheckEnabled"
     private static let ignoredSpellingWordsKey = "LaTeXaP.ignoredSpellingWords"
@@ -211,6 +224,12 @@ public final class DocumentViewModel: ObservableObject {
         if userDefaults.object(forKey: Self.editorFontSizeDefaultsKey) != nil {
             let storedSize = userDefaults.double(forKey: Self.editorFontSizeDefaultsKey)
             self.editorFontSize = CGFloat(min(max(storedSize, 10.0), 24.0))
+        }
+        if userDefaults.object(forKey: Self.autoCompileEnabledDefaultsKey) != nil {
+            self.autoCompileEnabled = userDefaults.bool(forKey: Self.autoCompileEnabledDefaultsKey)
+        }
+        if userDefaults.object(forKey: Self.useLightEditorBackgroundDefaultsKey) != nil {
+            self.useLightEditorBackground = userDefaults.bool(forKey: Self.useLightEditorBackgroundDefaultsKey)
         }
         if let rubricData = userDefaults.data(forKey: Self.rubricTargetsDefaultsKey),
            let decodedRubric = try? JSONDecoder().decode(RubricTargetConfig.self, from: rubricData) {
