@@ -67,13 +67,81 @@ public struct EditorFontPopoverView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Picker("Editing Pane Theme", selection: $viewModel.useLightEditorBackground) {
-                    Label("Light", systemImage: "sun.max.fill").tag(true)
-                    Label("Dark", systemImage: "moon.fill").tag(false)
+                HStack(spacing: 6) {
+                    Button {
+                        viewModel.useLightEditorBackground = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "sun.max.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(viewModel.useLightEditorBackground ? Color.orange : Color.secondary)
+                            Text("Light Theme")
+                                .font(.system(size: 11.5, weight: viewModel.useLightEditorBackground ? .semibold : .medium))
+                                .foregroundStyle(viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(
+                                    viewModel.useLightEditorBackground
+                                        ? Color.accentColor.opacity(0.18)
+                                        : Color(NSColor.textBackgroundColor).opacity(0.5)
+                                )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    viewModel.useLightEditorBackground
+                                        ? Color.accentColor.opacity(0.65)
+                                        : Color.secondary.opacity(0.22),
+                                    lineWidth: 1
+                                )
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Light editing pane theme")
+                    .accessibilityValue(viewModel.useLightEditorBackground ? "Selected" : "Not selected")
+
+                    Button {
+                        viewModel.useLightEditorBackground = false
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "moon.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(!viewModel.useLightEditorBackground ? Color.cyan : Color.secondary)
+                            Text("Dark Theme")
+                                .font(.system(size: 11.5, weight: !viewModel.useLightEditorBackground ? .semibold : .medium))
+                                .foregroundStyle(!viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(
+                                    !viewModel.useLightEditorBackground
+                                        ? Color.accentColor.opacity(0.18)
+                                        : Color(NSColor.textBackgroundColor).opacity(0.5)
+                                )
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    !viewModel.useLightEditorBackground
+                                        ? Color.accentColor.opacity(0.65)
+                                        : Color.secondary.opacity(0.22),
+                                    lineWidth: 1
+                                )
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Dark editing pane theme")
+                    .accessibilityValue(!viewModel.useLightEditorBackground ? "Selected" : "Not selected")
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .accessibilityLabel("Editing pane color theme")
             }
             .padding(10)
             .background(Color(NSColor.controlBackgroundColor))

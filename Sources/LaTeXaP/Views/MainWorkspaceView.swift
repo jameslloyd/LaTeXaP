@@ -1322,21 +1322,29 @@ public struct MainWorkspaceView: View {
     private var editorPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-                    .foregroundStyle(.secondary)
-                Text(viewModel.currentFileURL?.lastPathComponent ?? "Untitled.tex")
-                    .font(.system(size: 12, weight: .semibold))
-                if !viewModel.rubricTargets.studentModeHideExpl3 {
-                    Text("• LaTeX3 / expl3")
-                        .font(.system(size: 11))
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.left.forwardslash.chevron.right")
                         .foregroundStyle(.secondary)
+                    Text(viewModel.currentFileURL?.lastPathComponent ?? "Untitled.tex")
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if !viewModel.rubricTargets.studentModeHideExpl3 {
+                        Text("• LaTeX3")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .layoutPriority(-1)
+                    }
                 }
-                Spacer()
+
+                Spacer(minLength: 6)
 
                 Toggle(isOn: $viewModel.proseSpellCheckEnabled) {
                     HStack(spacing: 4) {
                         Image(systemName: "textformat.abc")
                         Text("Spellcheck")
+                            .lineLimit(1)
                         if viewModel.proseSpellCheckEnabled && !viewModel.spellingIssues.isEmpty {
                             Text("\(viewModel.spellingIssues.count)")
                                 .font(.system(size: 9.5, weight: .bold, design: .monospaced))
@@ -1352,6 +1360,7 @@ public struct MainWorkspaceView: View {
                 .toggleStyle(.button)
                 .buttonStyle(.borderless)
                 .controlSize(.small)
+                .fixedSize()
                 .help("Toggle LaTeX-Aware Prose Spellcheck (⌥⌘;)")
                 .accessibilityLabel("Prose Spellcheck")
                 .accessibilityValue(
@@ -1370,26 +1379,30 @@ public struct MainWorkspaceView: View {
                             .lineLimit(1)
                         Text("\(String(format: "%.0f", viewModel.editorFontSize))pt")
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                     .font(.system(size: 10.5, weight: .medium))
                 }
                 .buttonStyle(.borderless)
+                .fixedSize()
                 .popover(isPresented: $uiState.showEditorFontPopover, arrowEdge: .bottom) {
                     EditorFontPopoverView(viewModel: viewModel)
                 }
-                .help("Configure code editor font family and size")
+                .help("Configure code editor font family, size, and theme")
                 .accessibilityLabel("Editor Font")
                 .accessibilityValue("\(viewModel.editorFontName.isEmpty ? "System Monospaced" : viewModel.editorFontName), \(String(format: "%.1f", viewModel.editorFontSize)) points")
-                .accessibilityHint("Opens popover to select editor font family and size")
+                .accessibilityHint("Opens popover to select editor font family, size, and theme")
 
                 editorThemeSegmentedControl
 
-                Text("Line \(viewModel.cursorLine)")
+                Text("Ln \(viewModel.cursorLine)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.vertical, 6)
             .background(Color(NSColor.windowBackgroundColor))
 
             Divider()
@@ -1433,6 +1446,8 @@ public struct MainWorkspaceView: View {
                     .foregroundStyle(.secondary)
                 Text("Live PDF Preview")
                     .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
 
                 Button {
                     viewModel.autoCompileEnabled.toggle()
@@ -1442,30 +1457,34 @@ public struct MainWorkspaceView: View {
                             .fill(viewModel.autoCompileEnabled ? Color.green : Color.secondary.opacity(0.45))
                             .frame(width: 6, height: 6)
                         Image(systemName: viewModel.autoCompileEnabled ? "bolt.fill" : "bolt.slash")
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(viewModel.autoCompileEnabled ? Color.green : Color.secondary)
                         Text(viewModel.autoCompileEnabled ? "Auto-Compile Active" : "Auto-Compile Paused")
+                            .lineLimit(1)
                             .foregroundStyle(viewModel.autoCompileEnabled ? Color.primary : Color.secondary)
                     }
                     .font(.system(size: 10.5, weight: viewModel.autoCompileEnabled ? .semibold : .medium))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
                     .background(
                         viewModel.autoCompileEnabled
-                            ? Color.green.opacity(0.15)
+                            ? Color.green.opacity(0.16)
                             : Color.secondary.opacity(0.10)
                     )
                     .overlay(
                         Capsule()
-                            .stroke(
+                            .strokeBorder(
                                 viewModel.autoCompileEnabled
-                                    ? Color.green.opacity(0.55)
+                                    ? Color.green.opacity(0.60)
                                     : Color.secondary.opacity(0.22),
                                 lineWidth: 1
                             )
                     )
                     .clipShape(Capsule())
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
                 .help(
                     viewModel.autoCompileEnabled
                         ? "Automatically compile PDF as you type is ACTIVE — click to pause"
@@ -1478,8 +1497,9 @@ public struct MainWorkspaceView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .layoutPriority(-1)
 
-                Spacer()
+                Spacer(minLength: 4)
 
                 Button {
                     viewModel.pdfZoomScale = max(0.5, viewModel.pdfZoomScale - 0.15)
@@ -1540,30 +1560,36 @@ public struct MainWorkspaceView: View {
                     .fill(viewModel.autoCompileEnabled ? Color.green : Color.secondary.opacity(0.45))
                     .frame(width: 7, height: 7)
                 Image(systemName: viewModel.autoCompileEnabled ? "bolt.fill" : "bolt.slash")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(viewModel.autoCompileEnabled ? Color.green : Color.secondary)
                 Text(viewModel.autoCompileEnabled ? "Auto-Compile: ON" : "Auto-Compile: OFF")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(viewModel.autoCompileEnabled ? Color.primary : Color.secondary)
+                    .lineLimit(1)
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 4)
             .background(
-                viewModel.autoCompileEnabled
-                    ? Color.green.opacity(0.18)
-                    : Color.secondary.opacity(0.10)
+                Capsule()
+                    .fill(
+                        viewModel.autoCompileEnabled
+                            ? Color.green.opacity(0.18)
+                            : Color.secondary.opacity(0.10)
+                    )
             )
             .overlay(
                 Capsule()
-                    .stroke(
+                    .strokeBorder(
                         viewModel.autoCompileEnabled
                             ? Color.green.opacity(0.65)
                             : Color.secondary.opacity(0.25),
                         lineWidth: 1
                     )
             )
-            .clipShape(Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .fixedSize()
         .help(
             viewModel.autoCompileEnabled
                 ? "Automatically compile PDF as you type (ACTIVE — click to pause live compilation)"
@@ -1578,30 +1604,38 @@ public struct MainWorkspaceView: View {
             Button {
                 viewModel.useLightEditorBackground = true
             } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: 4) {
                     Image(systemName: "sun.max.fill")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(viewModel.useLightEditorBackground ? Color.orange : Color.secondary)
                     Text("Light")
+                        .font(.system(size: 10.5, weight: viewModel.useLightEditorBackground ? .semibold : .medium))
+                        .foregroundStyle(viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
+                        .lineLimit(1)
                 }
-                .font(.system(size: 10.5, weight: viewModel.useLightEditorBackground ? .semibold : .medium))
-                .foregroundStyle(viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2.5)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
                 .background(
-                    viewModel.useLightEditorBackground
-                        ? Color.accentColor.opacity(0.18)
-                        : Color.clear
+                    Capsule()
+                        .fill(
+                            viewModel.useLightEditorBackground
+                                ? Color.accentColor.opacity(0.20)
+                                : Color.clear
+                        )
                 )
                 .overlay(
                     Capsule()
-                        .stroke(
-                            viewModel.useLightEditorBackground ? Color.accentColor.opacity(0.55) : Color.clear,
+                        .strokeBorder(
+                            viewModel.useLightEditorBackground
+                                ? Color.accentColor.opacity(0.60)
+                                : Color.clear,
                             lineWidth: 1
                         )
                 )
-                .clipShape(Capsule())
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .fixedSize()
             .help("Switch LaTeX editing pane to Light theme")
             .accessibilityLabel("Editing pane Light theme")
             .accessibilityValue(viewModel.useLightEditorBackground ? "Selected" : "Not selected")
@@ -1609,41 +1643,52 @@ public struct MainWorkspaceView: View {
             Button {
                 viewModel.useLightEditorBackground = false
             } label: {
-                HStack(spacing: 3) {
+                HStack(spacing: 4) {
                     Image(systemName: "moon.fill")
-                        .foregroundStyle(!viewModel.useLightEditorBackground ? Color.indigo : Color.secondary)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(!viewModel.useLightEditorBackground ? Color.cyan : Color.secondary)
                     Text("Dark")
+                        .font(.system(size: 10.5, weight: !viewModel.useLightEditorBackground ? .semibold : .medium))
+                        .foregroundStyle(!viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
+                        .lineLimit(1)
                 }
-                .font(.system(size: 10.5, weight: !viewModel.useLightEditorBackground ? .semibold : .medium))
-                .foregroundStyle(!viewModel.useLightEditorBackground ? Color.primary : Color.secondary)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2.5)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
                 .background(
-                    !viewModel.useLightEditorBackground
-                        ? Color.accentColor.opacity(0.18)
-                        : Color.clear
+                    Capsule()
+                        .fill(
+                            !viewModel.useLightEditorBackground
+                                ? Color.accentColor.opacity(0.20)
+                                : Color.clear
+                        )
                 )
                 .overlay(
                     Capsule()
-                        .stroke(
-                            !viewModel.useLightEditorBackground ? Color.accentColor.opacity(0.55) : Color.clear,
+                        .strokeBorder(
+                            !viewModel.useLightEditorBackground
+                                ? Color.accentColor.opacity(0.60)
+                                : Color.clear,
                             lineWidth: 1
                         )
                 )
-                .clipShape(Capsule())
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .fixedSize()
             .help("Switch LaTeX editing pane to Dark theme")
             .accessibilityLabel("Editing pane Dark theme")
             .accessibilityValue(!viewModel.useLightEditorBackground ? "Selected" : "Not selected")
         }
         .padding(2)
-        .background(Color.secondary.opacity(0.10))
+        .background(
+            Capsule()
+                .fill(Color.secondary.opacity(0.12))
+        )
         .overlay(
             Capsule()
-                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+                .strokeBorder(Color.secondary.opacity(0.24), lineWidth: 1)
         )
-        .clipShape(Capsule())
+        .fixedSize()
     }
 
     @ViewBuilder
